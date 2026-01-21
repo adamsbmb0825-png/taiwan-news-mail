@@ -1,48 +1,48 @@
+# -*- coding: utf-8 -*-
 """
-遅れても価値がある類型の判定関数
-v5.2-lite-v3: 30日フォールバック時に使用
+遅れても価値がある類型の判定モジュール
+v5.3: インターフェース統一
 """
 
-def is_delayed_valuable_news(title, summary):
+def is_delayed_but_valuable(entry, stock_info):
     """
-    遅れても価値がある類型のキーワードが含まれているかチェック
+    ニュースが「遅れても価値がある」類型かどうかを判定する
     
     Args:
-        title: ニュースタイトル
-        summary: ニュース概要
-    
+        entry (dict): ニュースエントリ
+        stock_info (dict): 銘柄情報
+        
     Returns:
-        True / False
+        tuple: (is_valuable: bool, reason: str)
     """
-    # 業績関連キーワード
+    title = entry.get('title', '')
+    summary = entry.get('summary', '')
+    text = f"{title} {summary}"
+    
+    # 1. 業績・ファンダメンタルズ（長期有効）
     earnings_keywords = [
         '營收', '法說會', '財測', '展望', '接單', 'CapEx', '資本支出',
-        '月營收', '季報', '年報', '業績', '獲利', 'EPS', '毛利率',
-        '營業利益', '淨利', '營業額', '營業收入'
+        '月營收', '季報', '年報', '業績', '獲利', 'EPS', '毛利率'
     ]
-    
-    # 技術・需給関連キーワード
-    tech_supply_keywords = [
-        'DRAM', 'NAND', 'HBM', 'CoWoS', 'DDR5', 'LPDDR5',
-        '價格', '供需', '產能', '瓶頸', '缺貨', '供應鏈',
-        '先進製程', '先進封裝', 'EUV', '液冷', 'AI伺服器',
-        'GB200', 'H200', 'AI晶片', '記憶體'
+    for k in earnings_keywords:
+        if k in text:
+            return True, f"業績・ファンダメンタルズ関連（{k}）のため、遅れても分析価値あり"
+            
+    # 2. 技術・構造変化（長期有効）
+    tech_keywords = [
+        'DRAM', 'NAND', 'HBM', 'CoWoS', 'DDR5', '先進製程', '先進封裝',
+        'EUV', '液冷', 'AI伺服器', 'GB200', '產能', '擴產'
     ]
-    
-    # 政策・地政学関連キーワード
+    for k in tech_keywords:
+        if k in text:
+            return True, f"技術・構造変化関連（{k}）のため、遅れても分析価値あり"
+            
+    # 3. 政策・地政学（長期有効）
     policy_keywords = [
-        '關稅', '管制', '補助金', '投資審查', '美國廠', '地緣政治',
-        '貿易戰', '出口管制', '制裁', '投資限制', '稅收優惠',
-        '政策支持', '產業政策', '國家安全', '技術封鎖'
+        '關稅', '管制', '補助金', '美國廠', '地緣政治', '貿易戰', '制裁'
     ]
-    
-    # すべてのキーワードを統合
-    all_keywords = earnings_keywords + tech_supply_keywords + policy_keywords
-    
-    # タイトルまたは概要にキーワードが含まれているかチェック
-    text = f"{title} {summary}"
-    for keyword in all_keywords:
-        if keyword in text:
-            return True
-    
-    return False
+    for k in policy_keywords:
+        if k in text:
+            return True, f"政策・地政学関連（{k}）のため、遅れても分析価値あり"
+            
+    return False, ""

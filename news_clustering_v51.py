@@ -42,11 +42,10 @@ def cluster_news_by_topic(stock_name, relevant_news):
     
     # ニューステキストを準備
     news_text = "\n\n".join([
-        f"[{i+1}] タイトル: {news['title']}\n"
-        f"    出典: {news['publisher']}\n"
-        f"    概要: {news['snippet']}\n"
-        f"    関連性スコア: {news['relevance_score']}\n"
-        f"    判定理由: {news['relevance_reason']}"
+        f"[{i+1}] タイトル: {news.get('title', '')}\n"
+        f"    出典: {news.get('source', news.get('publisher', 'Unknown'))}\n"
+        f"    概要: {news.get('llm_result', {}).get('summary', news.get('summary', news.get('snippet', '')))}\n"
+        f"    判定理由: {news.get('llm_result', {}).get('reason', news.get('relevance_reason', ''))}"
         for i, news in enumerate(relevant_news)
     ])
     
