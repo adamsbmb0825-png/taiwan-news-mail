@@ -1,61 +1,58 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-台湾株ニュース配信システム v5.2-lite
-- 多面性を維持したまま実行時間を短縮（2-3分目標）
-- RSSフィード数削減（74件 → 30件）
-- 処理上限設定（URL解決200件、LLM判定60件）
-- 並列処理最適化（max_workers=10）
-- ログ即時表示（バッファリング無効化）
+台湾株ニュース配信システム v5.3
+- 2段階フォールバック方式（直近7日 -> 30日）
+- 遅延価値判定モジュール統合
+- ニュースクラスタリング機能（v5.1）
+- 投資判断補助ニュース（株価フェーズ整理）機能（v5.3新機能）
 """
 
-VERSION = "v5.2-lite-v3-frozen-20260115-0230"
-
 import os
+import sys
+import json
+import time
 import feedparser
 import requests
-from delayed_valuable_news import is_delayed_valuable_news
-from openai import OpenAI
-from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail
-import json
-import hashlib
-import re
-from datetime import datetime, timedelta
-from dateutil import parser as date_parser
-import pytz
-from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+from datetime import datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import time
+from bs4 import BeautifulSoup
+from openai import OpenAI
+from email_template_v5 import create_email_body, send_email_via_sendgrid
 from news_clustering_v51 import cluster_news_by_topic, prepare_delivery_news, print_clustering_log
+from delayed_valuable_news import is_delayed_but_valuable
+from stock_price_analyzer import get_stock_price_data
+from investment_aux_generator import generate_investment_aux_news
+
+# ============================================================
+# 設定・定数
+# ============================================================
+
+VERSION = "v5.3-20260121"
+
+# タイムゾーン設定 (JST)
+JST = timezone(timedelta(hours=9))
+
+# APIキー設定
+SENDGRID_API_KEY = os.environ.get("SENDGRID_API_KEY")
+RECIPIENT_EMAIL = os.environ.get("RECIPIENT_EMAIL")
+
+if not SENDGRID_API_KEY or not RECIPIENT_EMAIL:
+    print("エラー: 環境変数 SENDGRID_API_KEY または RECIPIENT_EMAIL が設定されていません。", flush=True)
+    sys.exit(1)
 
 # OpenAI クライアント初期化
 client = OpenAI()
 
-# 台湾時間
-TW_TZ = pytz.timezone('Asia/Taipei')
-
-# 統計情報
-STATS = {
-    'cache_hit': 0,
-    'cache_miss': 0,
-    'redirect_timeout': 0,
-    'redirect_failed': 0,
-    'sns_domain_excluded': 0,
-    'sns_publisher_excluded': 0,
-    'duplicate_excluded': 0,
-    'unknown_publisher_excluded': 0
-}
-
-# 銘柄情報を外部ファイルから読み込み
+# 銘柄リスト読み込み
 def load_stocks():
-    """stocks.jsonから銘柄プロファイルを読み込む"""
     try:
-        with open('/home/ubuntu/stocks.json', 'r', encoding='utf-8') as f:
+        with open('stocks.json', 'r', encoding='utf-8') as f:
             data = json.load(f)
-            return data.get('stocks', {})
+            # "stocks" キーがある場合はその中身を返す、なければそのまま返す（互換性維持）
+            return data.get('stocks', data)
     except FileNotFoundError:
-        print("エラー: stocks.json が見つかりません")
+        print("エラー: stocks.json が見つかりません。", flush=True)
         return {}
     except json.JSONDecodeError as e:
         print(f"エラー: stocks.json の形式が不正です: {e}", flush=True)
@@ -119,658 +116,308 @@ RSS_FEEDS = [
     "https://news.google.com/rss/search?q=台積電+營收&hl=zh-TW&gl=TW&ceid=TW:zh-Hant",
     "https://news.google.com/rss/search?q=創見+營收&hl=zh-TW&gl=TW&ceid=TW:zh-Hant",
     "https://news.google.com/rss/search?q=宇瞻+營收&hl=zh-TW&gl=TW&ceid=TW:zh-Hant",
-    "https://news.google.com/rss/search?q=廣達+營收&hl=zh-TW&gl=TW&ceid=TW:zh-Hant",
-    
-    # ========================================
-    # カテゴリ④ 共通業界クエリ（3件）
-    # ========================================
-    
-    "https://news.google.com/rss/search?q=半導體&hl=zh-TW&gl=TW&ceid=TW:zh-Hant",
-    "https://news.google.com/rss/search?q=DRAM+OR+NAND&hl=zh-TW&gl=TW&ceid=TW:zh-Hant",
-    "https://news.google.com/rss/search?q=ODM&hl=zh-TW&gl=TW&ceid=TW:zh-Hant",
+    "https://news.google.com/rss/search?q=廣達+營收&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
 ]
 
-# SNSドメインリスト
-SNS_DOMAINS = [
-    'threads.net',
-    'instagram.com',
-    'line.me',
-    'linkedin.com',
-    'tiktok.com',
-    'youtube.com', 'youtu.be'
+# 除外ドメイン・キーワード設定
+EXCLUDED_DOMAINS = [
+    'ptt.cc', 'dcard.tw', 'mobile01.com', 'facebook.com', 'instagram.com',
+    'youtube.com', 'wikipedia.org', 'amazon.com', 'ruten.com.tw', 'shopee.tw'
 ]
 
-def is_sns_domain(url):
-    """URLがSNSドメインかどうかを判定"""
-    url_lower = url.lower()
-    return any(sns in url_lower for sns in SNS_DOMAINS)
+EXCLUDED_KEYWORDS = [
+    '股市爆料同學會', '討論區', '懶人包', '優惠', '折扣', '開箱', '評測',
+    '謠言', '八卦', 'PTT', 'Dcard', 'Mobile01'
+]
 
-def clean_url(url):
-    """URLからトラッキングパラメータを削除"""
-    parsed = urlparse(url)
-    query_params = parse_qs(parsed.query)
-    
-    # 除外するパラメータ
-    exclude_params = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
-                      'fbclid', 'gclid', 'msclkid', 'oc', '_ga', '_gl']
-    
-    # クリーンなクエリパラメータを作成
-    clean_params = {k: v for k, v in query_params.items() if k not in exclude_params}
-    clean_query = urlencode(clean_params, doseq=True)
-    
-    # URLを再構築
-    clean_parsed = parsed._replace(query=clean_query)
-    return urlunparse(clean_parsed)
+# ============================================================
+# 関数定義
+# ============================================================
 
-def resolve_final_url(url, timeout=2):
-    """
-    リダイレクトを追跡して最終到達URLを取得
-    タイムアウト: 2秒（v5.2-liteで短縮）
-    """
-    try:
-        response = requests.head(url, allow_redirects=True, timeout=timeout)
-        final_url = clean_url(response.url)
-        return final_url
-    except requests.Timeout:
-        STATS['redirect_timeout'] += 1
-        return None
-    except Exception as e:
-        STATS['redirect_failed'] += 1
-        return None
-
-def extract_publisher_from_url(url):
-    """URLから出典メディア名を抽出"""
-    domain_mapping = {
-        'cnyes.com': '鉅亨網',
-        'ctee.com.tw': '工商時報',
-        'technews.tw': 'TechNews 科技新報',
-        'udn.com': '聯合新聞網',
-        'ltn.com.tw': '自由時報',
-        'chinatimes.com': '中時新聞網',
-        'cna.com.tw': '中央社 CNA',
-        'moneydj.com': 'MoneyDJ',
-        'eettaiwan.com': 'EE Times Taiwan',
-        'digitimes.com.tw': 'DIGITIMES',
-        'storm.mg': '風傳媒',
-        'businessweekly.com.tw': '商業周刊',
-        'cw.com.tw': '天下雜誌',
-        'wealth.com.tw': '財訊',
-        'mirrormedia.mg': '鏡週刊',
-        'ettoday.net': 'ETtoday',
-        'setn.com': '三立新聞網',
-        'nownews.com': 'NOWnews',
-        'yahoo.com': 'Yahoo奇摩',
-        'pchome.com.tw': 'PChome',
-        'cmoney.tw': 'CMoney',
-        'moneysmart.tw': 'MoneySmart',
-        'wealth.com.tw': '財訊',
-        'businesstoday.com.tw': '今周刊',
-        'smart.businessweekly.com.tw': 'Smart自學網',
-        'money-link.com.tw': '理財周刊',
-        'moneyweekly.com.tw': '理財周刊',
-        'ctee.com.tw': '工商時報',
-        'economic.com.tw': '經濟日報',
-        'appledaily.com.tw': '蘋果新聞網',
-        'ctwant.com': 'CTWANT',
-        'sinotrade.com.tw': '永豐金證券',
-        'wantgoo.com': '玩股網',
-        'wantrich.chinatimes.com': '旺得富理財網',
-        'knowing.asia': 'knowing',
-        'newtalk.tw': '新頭殼',
-        'taiwannews.com.tw': 'Taiwan News',
-        'rti.org.tw': '中央廣播電台',
-        'epochtimes.com': '大紀元',
-        'ntdtv.com': '新唐人',
-        'voacantonese.com': '美國之音',
-        'rfi.fr': 'RFI',
-        'bbc.com': 'BBC',
-        'reuters.com': 'Reuters',
-        'bloomberg.com': 'Bloomberg',
-        'ft.com': 'Financial Times',
-        'wsj.com': 'Wall Street Journal',
-        'nikkei.com': '日經中文網',
-    }
-    
-    parsed = urlparse(url)
-    domain = parsed.netloc.lower().replace('www.', '')
-    
-    for key, value in domain_mapping.items():
-        if key in domain:
-            return value
-    
-    return None
-
-def normalize_text(text):
-    """テキストを正規化（全角/半角統一、記号除去、空白圧縮）"""
-    # 全角→半角
-    text = text.translate(str.maketrans('０１２３４５６７８９', '0123456789'))
-    # 記号除去
-    text = re.sub(r'[^\w\s]', '', text)
-    # 空白圧縮
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text
-
-def generate_article_signature(title, publisher, pub_date, snippet):
-    """記事署名を生成（重複排除用）"""
-    normalized_title = normalize_text(title)
-    normalized_snippet = normalize_text(snippet[:120])
-    date_str = pub_date.strftime('%Y-%m-%d') if pub_date else 'unknown'
-    
-    signature_string = f"{normalized_title}|{publisher}|{date_str}|{normalized_snippet}"
-    return hashlib.md5(signature_string.encode('utf-8')).hexdigest()
-
-def load_cache():
-    """キャッシュファイルを読み込み"""
-    try:
-        with open('.taiwan_stock_news_cache_v5.json', 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return {"news": {}, "topics": {}}
-
-def save_cache(cache):
-    """キャッシュファイルを保存"""
-    with open('.taiwan_stock_news_cache_v5.json', 'w', encoding='utf-8') as f:
-        json.dump(cache, f, ensure_ascii=False, indent=2)
-
-def clean_cache(cache):
-    """古いキャッシュをクリーニング"""
-    now = datetime.now(TW_TZ)
-    
-    # ニュースキャッシュ: 30日間保持
-    if 'news' not in cache:
-        cache['news'] = {}
-    news_cutoff = (now - timedelta(days=30)).isoformat()
-    cache['news'] = {sig: data for sig, data in cache['news'].items() 
-                     if data.get('cached_at', '') > news_cutoff}
-    
-    # 論点キャッシュ: 7営業日（約10日）保持
-    if 'topics' not in cache:
-        cache['topics'] = {}
-    topic_cutoff = (now - timedelta(days=10)).isoformat()
-    cache['topics'] = {stock_id: data for stock_id, data in cache['topics'].items() 
-                       if data.get('cached_at', '') > topic_cutoff}
-    
-    return cache
-
-def process_rss_entry(entry, cache):
-    """
-    RSSエントリを処理（並列処理用）
-    キャッシュ優先でリダイレクト追跡をスキップ
-    """
-    rss_url = entry.get("link", "")
-    title = entry.get("title", "")
-    
-    # キャッシュチェック（rss_urlベース）
-    if rss_url in cache.get('url_to_signature', {}):
-        signature = cache['url_to_signature'][rss_url]
-        if signature in cache['news']:
-            STATS['cache_hit'] += 1
-            cached_data = cache['news'][signature]
-            # キャッシュからSNS判定
-            if is_sns_domain(cached_data['final_url']):
-                STATS['sns_domain_excluded'] += 1
-                return None
-            return cached_data
-    
-    STATS['cache_miss'] += 1
-    
-    # リダイレクト追跡
-    final_url = resolve_final_url(rss_url, timeout=3)
-    
-    # リダイレクト未解決は除外
-    if not final_url:
-        return None
-    
-    # SNSドメインチェック
-    if is_sns_domain(final_url):
-        STATS['sns_domain_excluded'] += 1
-        return None
-    
-    # 出典抽出
-    publisher = None
-    if hasattr(entry, 'source') and hasattr(entry.source, 'title'):
-        publisher = entry.source.title
-    if not publisher:
-        publisher = extract_publisher_from_url(final_url)
-    
-    # 出典不明は除外
-    if not publisher:
-        STATS['unknown_publisher_excluded'] += 1
-        return None
-    
-    # 出典がSNSドメインの場合も除外
-    if any(sns in publisher.lower() for sns in ['facebook', 'twitter', 'x.com', 'instagram', 'line', 'threads']):
-        STATS['sns_publisher_excluded'] += 1
-        return None
-    
-    # 日時取得
-    pub_date = None
-    if hasattr(entry, 'published'):
-        try:
-            pub_date = date_parser.parse(entry.published).astimezone(TW_TZ)
-        except:
-            pass
-    
-    # スニペット取得
-    snippet = entry.get("summary", "")[:200]
-    
-    # 記事署名生成
-    signature = generate_article_signature(title, publisher, pub_date, snippet)
-    
-    news_entry = {
-        "title": title,
-        "rss_url": rss_url,
-        "final_url": final_url,
-        "link": final_url,
-        "publisher": publisher,
-        "published": pub_date.isoformat() if pub_date else None,
-        "snippet": snippet,
-        "signature": signature,
-        "cached_at": datetime.now(TW_TZ).isoformat()
-    }
-    
-    return news_entry
-
-def collect_news_parallel():
-    """
-    RSSフィードからニュースを並列収集
-    v5.2-lite-v2: 銘柄別にURL解決（各フィード上位20件）、max_workers=10
-    """
-    print("📰 RSSフィードからニュース収集中...", flush=True)
-    cache = load_cache()
-    
-    # url_to_signatureマッピングを初期化
-    if 'url_to_signature' not in cache:
-        cache['url_to_signature'] = {}
-    
-    # v5.2-lite-v2: 銘柄別にRSS収集（各フィード上位20件）
-    MAX_ENTRIES_PER_FEED = 20
+def fetch_rss_feeds(days_back=7):
+    """RSSフィードからニュースを収集"""
     all_entries = []
+    seen_links = set()
     
-    for feed_url in RSS_FEEDS:
+    cutoff_date = datetime.now(JST) - timedelta(days=days_back)
+    print(f"📰 RSSフィードからニュース収集中... (過去{days_back}日分)", flush=True)
+    
+    for url in RSS_FEEDS:
         try:
-            feed = feedparser.parse(feed_url)
-            # 各フィードから上位20件を取得
-            all_entries.extend(feed.entries[:MAX_ENTRIES_PER_FEED])
+            feed = feedparser.parse(url)
+            for entry in feed.entries:
+                # 日付フィルタリング
+                published = None
+                if hasattr(entry, 'published_parsed'):
+                    published = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc).astimezone(JST)
+                
+                if published and published < cutoff_date:
+                    continue
+                
+                # 重複チェック
+                if entry.link in seen_links:
+                    continue
+                
+                seen_links.add(entry.link)
+                
+                # 必要な情報を抽出
+                all_entries.append({
+                    'title': entry.title,
+                    'link': entry.link,
+                    'published': published,
+                    'source': entry.source.title if hasattr(entry, 'source') else 'Unknown',
+                    'summary': entry.summary if hasattr(entry, 'summary') else ''
+                })
+                
         except Exception as e:
-            print(f"⚠️  RSS収集エラー: {feed_url} - {e}", flush=True)
-    
-    print(f"  RSS収集完了: {len(all_entries)}件（各フィード上位{MAX_ENTRIES_PER_FEED}件）", flush=True)
-    
-    entries_to_process = all_entries
-    
-    # 並列処理でリダイレクト追跡（max_workers=10）
-    news_list = []
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        futures = {executor.submit(process_rss_entry, entry, cache): entry for entry in entries_to_process}
-        
-        for i, future in enumerate(as_completed(futures), 1):
-            if i % 50 == 0:
-                print(f"  処理中: {i}/{len(entries_to_process)}件", flush=True)
+            print(f"  ⚠️ フィード取得エラー: {url} - {e}", flush=True)
             
+    print(f"  RSS収集完了: {len(all_entries)}件", flush=True)
+    return all_entries
+
+def resolve_redirects(entries):
+    """Google Newsの短縮URLを展開"""
+    print(f"🔗 URL解決中（{len(entries)}件）...", flush=True)
+    
+    # 件数が多い場合は最新のものに絞る
+    if len(entries) > 100:
+        print("  ⚠️ 件数が多いため、最新100件のみ処理します", flush=True)
+        entries = sorted(entries, key=lambda x: x['published'] or datetime.min, reverse=True)[:100]
+    
+    resolved_entries = []
+    
+    # セッションの再利用
+    session = requests.Session()
+    
+    for entry in entries:
+        try:
+            # Google Newsのリンクかどうかチェック
+            if 'news.google.com' in entry['link']:
+                # HEADリクエストでリダイレクト先を取得（高速化）
+                response = session.head(entry['link'], allow_redirects=True, timeout=5)
+                entry['link'] = response.url
+            
+            # 除外ドメインチェック
+            domain = entry['link'].split('/')[2] if len(entry['link'].split('/')) > 2 else ''
+            if any(ex in domain for ex in EXCLUDED_DOMAINS):
+                continue
+                
+            resolved_entries.append(entry)
+            
+        except Exception:
+            # エラー時は元のリンクのまま追加（または除外）
+            resolved_entries.append(entry)
+            
+    print(f"✅ 重複除外後: {len(resolved_entries)}件", flush=True)
+    return resolved_entries
+
+def analyze_relevance_with_llm(entry, stock_code, stock_info, is_fallback_mode=False):
+    """LLMを使用してニュースの関連性を判定"""
+    
+    # 判定基準の構築
+    criteria = f"""
+    1. 銘柄「{stock_info['name']}」({stock_code}) の業績、製品、技術、受注、提携に直接関係するか。
+    2. 競合他社や業界全体の動向で、この銘柄に重大な影響を与えるか。
+    3. 単なる市況概況や、名前が出ているだけの記事は除外する。
+    """
+    
+    if is_fallback_mode:
+        criteria += """
+    4. 【重要】記事の日付が古くても、現在も有効な情報（技術解説、長期展望、構造的な変化など）は「関連あり」とする。
+    5. 短期的な株価変動や、すでに終了したイベントの速報は除外する。
+        """
+    
+    prompt = f"""
+    以下のニュース記事が、投資家にとって「{stock_info['name']}」の分析に役立つ重要な情報を含んでいるか判定してください。
+    
+    タイトル: {entry['title']}
+    ソース: {entry['source']}
+    概要: {entry['summary']}
+    
+    判定基準:
+    {criteria}
+    
+    JSON形式で回答してください:
+    {{
+        "is_relevant": true/false,
+        "reason": "判定理由（日本語、50文字以内）",
+        "summary": "記事の要約（日本語、100文字以内。投資判断に役立つ具体的な事実を中心に）"
+    }}
+    """
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "あなたは台湾株の専門アナリストです。厳格に情報の価値を判定します。"},
+                {"role": "user", "content": prompt}
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.0
+        )
+        
+        result = json.loads(response.choices[0].message.content)
+        
+        # フォールバックモードかつ「関連なし」の場合、遅延価値判定を試行
+        if is_fallback_mode and not result['is_relevant']:
+            is_valuable, reason = is_delayed_but_valuable(entry, stock_info)
+            if is_valuable:
+                result['is_relevant'] = True
+                result['reason'] = f"【遅延価値あり】{reason}"
+                
+        return result
+        
+    except Exception as e:
+        return {"is_relevant": False, "reason": f"エラー: {e}", "summary": ""}
+
+def process_stock_news(stock_code, stock_info, all_entries, is_fallback_mode=False):
+    """特定の銘柄に関するニュースを処理"""
+    print(f"============================================================", flush=True)
+    print(f"📊 {stock_info['name']}（{stock_code}）", flush=True)
+    print(f"============================================================", flush=True)
+    
+    # キーワードフィルタリング（1次選別）
+    keywords = [stock_info['name'], stock_code]
+    if 'keywords' in stock_info:
+        keywords.extend(stock_info['keywords'])
+        
+    candidates = []
+    for entry in all_entries:
+        text = (entry['title'] + ' ' + entry['summary']).lower()
+        if any(k.lower() in text for k in keywords):
+            candidates.append(entry)
+            
+    print(f"候補ニュース: {len(candidates)}件", flush=True)
+    
+    # 候補が多すぎる場合は絞り込み（LLMコスト削減）
+    # フォールバックモード時は上限を厳しくする（10件）、通常時は60件
+    limit = 10 if is_fallback_mode else 60
+    if len(candidates) > limit:
+        candidates = sorted(candidates, key=lambda x: x['published'] or datetime.min, reverse=True)[:limit]
+    
+    # 2. LLMによる関連性判定
+    relevant_news = []
+    news_summaries_for_aux = [] # 投資判断補助用の要約リスト
+    
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        future_to_entry = {
+            executor.submit(analyze_relevance_with_llm, entry, stock_code, stock_info, is_fallback_mode): entry 
+            for entry in candidates
+        }
+        
+        for future in as_completed(future_to_entry):
+            entry = future_to_entry[future]
             try:
                 result = future.result()
-                if result:
-                    news_list.append(result)
-                    # キャッシュに保存
-                    cache['news'][result['signature']] = result
-                    cache['url_to_signature'][result['rss_url']] = result['signature']
-            except Exception as e:
+                if result['is_relevant']:
+                    entry['llm_result'] = result
+                    relevant_news.append(entry)
+                    news_summaries_for_aux.append(result['summary'])
+                    print(f"  ✅ {entry['title'][:30]}...", flush=True)
+                else:
+                    # print(f"  ❌ {entry['title'][:30]}...", flush=True)
+                    pass
+            except Exception:
                 pass
+                
+    print(f"✅ 関連ニュース: {len(relevant_news)}件", flush=True)
     
-    # 重複除外
-    unique_news = {}
-    for news in news_list:
-        signature = news['signature']
-        if signature in unique_news:
-            STATS['duplicate_excluded'] += 1
-        else:
-            unique_news[signature] = news
+    # 3. ニュースクラスタリング（v5.1機能）
+    clustered_news = []
+    if relevant_news:
+        # 引数順序修正: (stock_name, relevant_news)
+        clusters = cluster_news_by_topic(stock_info['name'], relevant_news)
+        print_clustering_log(stock_info['name'], clusters)
+        clustered_news = prepare_delivery_news(clusters)
+        print(f"✅ 配信: {len(clustered_news)}クラスタ", flush=True)
     
-    print(f"✅ 重複除外後: {len(unique_news)}件", flush=True)
+    # 4. 投資判断補助ニュース生成（v5.3新機能）
+    # ニュースがなくても株価データはあるので必ず生成する
+    print(f"📉 投資判断補助レポート生成中...", flush=True)
     
-    # キャッシュ保存
-    cache = clean_cache(cache)
-    save_cache(cache)
+    # 株価データ取得
+    price_data = get_stock_price_data(stock_code)
     
-    return list(unique_news.values())
-
-def translate_title(title):
-    """タイトルを日本語に翻訳"""
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4.1-mini",
-            messages=[
-                {"role": "system", "content": "あなたは台湾の金融ニュースタイトルを日本語に翻訳する専門家です。簡潔で正確な翻訳を提供してください。"},
-                {"role": "user", "content": f"以下の台湾株ニュースタイトルを日本語に翻訳してください:\n\n{title}"}
-            ],
-            temperature=0.3
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        return title
-
-def judge_relevance(stock_id, stock_name, news_list, max_items=15):
-    """LLMでニュースの関連性を判定（v5.2-lite-v3: デフォルト最大15件）"""
-    news_text = "\n\n".join([
-        f"[{i+1}] {news['title']}\n出典: {news['publisher']}\n概要: {news['snippet']}"
-        for i, news in enumerate(news_list[:max_items])
-    ])
-    
-    prompt = f"""
-あなたは台湾株の投資判断を支援するアナリストです。
-
-銘柄: {stock_name}（{stock_id}）
-業態: {STOCKS[stock_id]['business_type']}
-
-以下のニュースリストから、この銘柄の投資判断に有効な情報を含むニュースを選別してください。
-
-【判定基準】
-- 関連あり: 業績、受注、技術、市場動向など投資判断に直接影響する情報
-- 関連性不明: 業界全般の話題で、銘柄への影響が不明確
-- 参考外: 無関係、または投資判断に無価値
-
-ニュースリスト:
-{news_text}
-
-【出力形式】
-各ニュースについて、以下の形式でJSON配列として出力してください:
-[
-  {{"index": 1, "relevance": "関連あり", "score": 85, "reason": "理由"}},
-  {{"index": 2, "relevance": "参考外", "score": 20, "reason": "理由"}}
-]
-"""
-    
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4.1-mini",
-            messages=[
-                {"role": "system", "content": "あなたは台湾株の投資判断を支援するアナリストです。"},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.3
-        )
-        
-        result_text = response.choices[0].message.content.strip()
-        # JSONを抽出
-        json_match = re.search(r'\[.*\]', result_text, re.DOTALL)
-        if json_match:
-            judgments = json.loads(json_match.group())
-            return judgments
-        return []
-    except Exception as e:
-        print(f"⚠️  関連性判定エラー: {e}", flush=True)
-        return []
-
-def generate_topic(stock_id, stock_name, relevant_news):
-    """論点を生成"""
-    cache = load_cache()
-    
-    # キャッシュチェック
-    if stock_id in cache.get('topics', {}):
-        cached_topic = cache['topics'][stock_id]
-        cached_at = datetime.fromisoformat(cached_topic['cached_at'])
-        if datetime.now(TW_TZ) - cached_at < timedelta(days=10):
-            return cached_topic['topic']
-    
-    news_text = "\n\n".join([
-        f"[{i+1}] {news['title']}\n出典: {news['publisher']}\n概要: {news['snippet']}"
-        for i, news in enumerate(relevant_news[:5])
-    ])
-    
-    prompt = f"""
-銘柄: {stock_name}（{stock_id}）
-業態: {STOCKS[stock_id]['business_type']}
-
-以下のニュースから、投資家が「今後どこを見るべきか」という論点を1文で生成してください。
-
-ニュース:
-{news_text}
-
-【出力形式】
-論点のみを1文で出力してください（例：「2ナノ製造技術の量産開始時期とCoWoS受注増加が収益拡大にどう影響するかが焦点」）
-"""
-    
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4.1-mini",
-            messages=[
-                {"role": "system", "content": "あなたは台湾株の投資判断を支援するアナリストです。"},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.5
-        )
-        
-        topic = response.choices[0].message.content.strip()
-        
-        # キャッシュに保存
-        if 'topics' not in cache:
-            cache['topics'] = {}
-        cache['topics'][stock_id] = {
-            'topic': topic,
-            'cached_at': datetime.now(TW_TZ).isoformat()
-        }
-        save_cache(cache)
-        
-        return topic
-    except Exception as e:
-        print(f"⚠️  論点生成エラー: {e}", flush=True)
-        return "市場動向と業績への影響を注視"
-
-def send_email(results, taipei_time):
-    """メール送信"""
-    from email_template_v5 import generate_html_email
-    
-    html_content = generate_html_email(results, taipei_time)
-    
-    message = Mail(
-        from_email='adamsbmb0825@gmail.com',
-        to_emails='adamsbmb0825@gmail.com',
-        subject=f'🇹🇼 台湾株ニュース配信 v5.0 - {taipei_time.strftime("%Y年%m月%d日 %H:%M:%S")}',
-        html_content=html_content
+    # レポート生成
+    investment_aux = generate_investment_aux_news(
+        stock_code, 
+        stock_info['name'], 
+        price_data, 
+        news_summaries_for_aux
     )
+    print(f"✅ 投資判断補助レポート生成完了", flush=True)
     
-    try:
-        sg = SendGridAPIClient(os.environ.get('SENDGRID_API_KEY'))
-        response = sg.send(message)
-        print(f"✅ メール送信成功（ステータス: {response.status_code}）", flush=True)
-    except Exception as e:
-        print(f"❌ メール送信エラー: {e}", flush=True)
-
-def print_stats():
-    """統計情報を出力"""
-    print("\n" + "="*60)
-    print("📊 統計情報")
-    print("="*60)
-    print(f"キャッシュヒット: {STATS['cache_hit']}件", flush=True)
-    print(f"キャッシュミス: {STATS['cache_miss']}件", flush=True)
-    print(f"キャッシュヒット率: {STATS['cache_hit'] / (STATS['cache_hit'] + STATS['cache_miss']) * 100:.1f}%" if (STATS['cache_hit'] + STATS['cache_miss']) > 0 else "N/A")
-    print(f"リダイレクトタイムアウト: {STATS['redirect_timeout']}件", flush=True)
-    print(f"リダイレクト失敗: {STATS['redirect_failed']}件", flush=True)
-    print(f"SNSドメイン除外: {STATS['sns_domain_excluded']}件", flush=True)
-    print(f"SNS出典除外: {STATS['sns_publisher_excluded']}件", flush=True)
-    print(f"出典不明除外: {STATS['unknown_publisher_excluded']}件", flush=True)
-    print(f"重複除外: {STATS['duplicate_excluded']}件", flush=True)
-    print("="*60 + "\n")
+    return {
+        'stock_code': stock_code,
+        'stock_name': stock_info['name'],
+        'news': clustered_news,
+        'investment_aux': investment_aux, # 追加
+        'news_count': len(relevant_news)
+    }
 
 def main():
-    import os
-    
-    print("="*60)
+    print("============================================================", flush=True)
     print(f"台湾株ニュース配信システム {VERSION}", flush=True)
-    print("="*60)
+    print("============================================================", flush=True)
     
     # 第1段階: 直近7日モード
-    print("\n=== 第1段階: 直近7日モード ===", flush=True)
-    all_news_7days = collect_news_parallel()
+    print("=== 第1段階: 直近7日モード ===", flush=True)
+    all_entries = fetch_rss_feeds(days_back=7)
+    all_entries = resolve_redirects(all_entries)
     
-    # 統計情報を出力
-    print_stats()
-    
-    # 各銘柄の処理（第1段階）
     results = {}
-    stocks_need_fallback = []  # フォールバックが必要な銘柄
+    stocks_needing_fallback = []
     
-    for stock_id, stock_info in STOCKS.items():
-        print("="*60)
-        print(f"📊 {stock_info['name']}（{stock_id}）", flush=True)
-        print("="*60)
+    for stock_code, stock_info in STOCKS.items():
+        result = process_stock_news(stock_code, stock_info, all_entries, is_fallback_mode=False)
+        results[stock_code] = result
         
-        # 関連ニュースを抽出
-        stock_keywords = [stock_info['name'], stock_id]
-        # 宇瞻の場合はApacerも追加
-        if stock_id == '8271':
-            stock_keywords.append('Apacer')
-            stock_keywords.append('apacer')
-        candidate_news = [news for news in all_news_7days if any(kw in news['title'] or kw in news['snippet'] for kw in stock_keywords)]
+        # ニュースが0件の場合はフォールバック対象に追加
+        if result['news_count'] == 0:
+            stocks_needing_fallback.append(stock_code)
+            
+    # 第2段階: 30日フォールバックモード（対象銘柄のみ）
+    if stocks_needing_fallback:
+        print("\n=== 第2段階: 30日フォールバックモード ===", flush=True)
+        print(f"対象銘柄: {', '.join(stocks_needing_fallback)}", flush=True)
         
-        print(f"候補ニュース: {len(candidate_news)}件", flush=True)
+        # 過去30日分のRSSを取得（コスト削減のため、対象銘柄のクエリに絞るのが理想だが、今回は簡易的に全取得）
+        # ※本来はここでクエリを絞るべきだが、RSS_FEEDSの構造上、全取得してフィルタリングする
+        fallback_entries = fetch_rss_feeds(days_back=30)
+        fallback_entries = resolve_redirects(fallback_entries)
         
-        if len(candidate_news) == 0:
-            print("⚠️  関連ニュースなし (フォールバック候補)", flush=True)
-            stocks_need_fallback.append((stock_id, stock_info))
-            continue
-        
-        # v5.2-lite: LLM関連性判定は上位15件まで
-        judgments = judge_relevance(stock_id, stock_info['name'], candidate_news)
-        
-        # 関連ニュースを抽出
-        relevant_news = []
-        for judgment in judgments:
-            if judgment['relevance'] == '関連あり':
-                idx = judgment['index'] - 1
-                if idx < len(candidate_news):
-                    news = candidate_news[idx].copy()
-                    news['relevance_score'] = judgment['score']
-                    news['relevance_reason'] = judgment['reason']
-                    # タイトル翻訳
-                    print(f"  [翻訳中] {news['title'][:50]}...", flush=True)
-                    news['title_ja'] = translate_title(news['title'])
-                    relevant_news.append(news)
-        
-        print(f"✅ 関連ニュース: {len(relevant_news)}件", flush=True)
-        
-        if len(relevant_news) == 0:
-            print("⚠️  関連ニュースなし (フォールバック候補)", flush=True)
-            stocks_need_fallback.append((stock_id, stock_info))
-            continue
-        
-        # スコア順にソート
-        relevant_news.sort(key=lambda x: x['relevance_score'], reverse=True)
-        
-        # 論点クラスタリング
-        clustering_result = cluster_news_by_topic(stock_info['name'], relevant_news)
-        print_clustering_log(stock_info['name'], clustering_result)
-        
-        # 配信ニュースを準備（クラスタ情報付き）
-        delivery_news = prepare_delivery_news(clustering_result, max_clusters=3)
-        
-        print(f"✅ 配信: {len(delivery_news)}クラスタ", flush=True)
-        
-        # 論点生成
-        topic = generate_topic(stock_id, stock_info['name'], relevant_news)
-        
-        results[stock_id] = {
-            'stock_info': stock_info,
-            'topic': topic,
-            'news': delivery_news,
-            'is_single_event': clustering_result['is_single_event'],
-            'event_description': clustering_result['event_description']
-        }
+        for stock_code in stocks_needing_fallback:
+            stock_info = STOCKS[stock_code]
+            print(f"🔄 {stock_info['name']} のフォールバック処理を開始...", flush=True)
+            
+            # フォールバックモードで再処理
+            result = process_stock_news(stock_code, stock_info, fallback_entries, is_fallback_mode=True)
+            
+            # 結果を上書き（ニュースが見つかった場合のみ、あるいは0件でも投資判断補助はあるので更新）
+            results[stock_code] = result
+
+    # メール作成と送信
+    print("\n📧 メール作成中...", flush=True)
+    email_body = create_email_body(results)
     
-    # 第2段階: 30日フォールバック（ニュース不足銘柄のみ）
-    if stocks_need_fallback:
-        print("\n=== 第2段階: 30日フォールバック ===", flush=True)
-        print(f"フォールバック対象: {len(stocks_need_fallback)}銘柄", flush=True)
-        
-        # 30日分のRSS収集（フォールバック用）
-        # TODO: 実装を簡略化するため、7日分のニュースから遅れても価値がある類型のみをフィルタリング
-        # 実際の30日分の収集は次のバージョンで実装
-        
-        for stock_id, stock_info in stocks_need_fallback:
-            print("="*60)
-            print(f"📊 {stock_info['name']}（{stock_id}）- 30日拡張", flush=True)
-            print("="*60)
-            
-            # 7日分のニュースから遅れても価値がある類型のみをフィルタリング
-            stock_keywords = [stock_info['name'], stock_id]
-            if stock_id == '8271':
-                stock_keywords.append('Apacer')
-                stock_keywords.append('apacer')
-            
-            # 遅れても価値がある類型のニュースのみを抽出
-            candidate_news_30days = [
-                news for news in all_news_7days 
-                if any(kw in news['title'] or kw in news['snippet'] for kw in stock_keywords)
-                and is_delayed_valuable_news(news['title'], news['snippet'])
-            ]
-            
-            print(f"30日拡張候補ニュース: {len(candidate_news_30days)}件", flush=True)
-            
-            if len(candidate_news_30days) == 0:
-                print("⚠️  30日拡張でも関連ニュースなし", flush=True)
-                continue
-            
-            # LLM関連性判定（最大10件）
-            judgments_30days = judge_relevance(stock_id, stock_info['name'], candidate_news_30days, max_items=10)
-            
-            # 関連ニュースを抽出
-            relevant_news_30days = []
-            for judgment in judgments_30days:
-                if judgment['relevance'] == '関連あり':
-                    idx = judgment['index'] - 1
-                    if idx < len(candidate_news_30days):
-                        news = candidate_news_30days[idx].copy()
-                        news['relevance_score'] = judgment['score']
-                        news['relevance_reason'] = judgment['reason']
-                        # タイトル翻訳
-                        print(f"  [翻訳中] {news['title'][:50]}...", flush=True)
-                        news['title_ja'] = translate_title(news['title'])
-                        relevant_news_30days.append(news)
-            
-            print(f"✅ 関連ニュース: {len(relevant_news_30days)}件", flush=True)
-            
-            if len(relevant_news_30days) == 0:
-                print("⚠️  30日拡張でも関連ニュースなし", flush=True)
-                continue
-            
-            # スコア順にソート
-            relevant_news_30days.sort(key=lambda x: x['relevance_score'], reverse=True)
-            
-            # 論点クラスタリング
-            clustering_result = cluster_news_by_topic(stock_info['name'], relevant_news_30days)
-            print_clustering_log(stock_info['name'], clustering_result)
-            
-            # 配信ニュースを準備（クラスタ情報付き）
-            delivery_news = prepare_delivery_news(clustering_result, max_clusters=3)
-            
-            print(f"✅ 配信: {len(delivery_news)}クラスタ", flush=True)
-            
-            # 論点生成
-            topic = generate_topic(stock_id, stock_info['name'], relevant_news_30days)
-            
-            results[stock_id] = {
-                'stock_info': stock_info,
-                'topic': topic,
-                'news': delivery_news,
-                'is_single_event': clustering_result['is_single_event'],
-                'event_description': clustering_result['event_description']
-            }
+    # ファイルに保存（デバッグ用）
+    with open("email_preview.html", "w", encoding="utf-8") as f:
+        f.write(email_body)
+    print("  プレビュー保存: email_preview.html", flush=True)
     
-    # 最終結果サマリー
-    print("\n=== 最終結果 ===", flush=True)
-    for stock_id, result in results.items():
-        stock_name = result['stock_info']['name']
-        news_count = len(result['news'])
-        print(f"{stock_name}（{stock_id}）: 配信{news_count}クラスタ", flush=True)
+    print("🚀 メール送信中...", flush=True)
+    status_code = send_email_via_sendgrid(
+        api_key=SENDGRID_API_KEY,
+        from_email=RECIPIENT_EMAIL,
+        to_email=RECIPIENT_EMAIL,
+        subject=f"【台湾株】本日の投資判断レポート ({datetime.now(JST).strftime('%Y/%m/%d')})",
+        html_content=email_body
+    )
     
-    # メール送信
-    if results:
-        now_taipei = datetime.now(TW_TZ)
-        print("\n📧 メール送信中...", flush=True)
-        send_email(results, now_taipei)
+    if 200 <= status_code < 300:
+        print("✅ 送信成功！", flush=True)
     else:
-        print("\n⚠️  配信するニュースがありません", flush=True)
+        print(f"❌ 送信失敗: ステータスコード {status_code}", flush=True)
 
 if __name__ == "__main__":
     main()
