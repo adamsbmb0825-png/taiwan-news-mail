@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-HTMLメールテンプレート生成関数 v5.3（投資判断補助ニュース対応）
+HTMLメールテンプレート生成関数 v5.3（投資判断補助ニュース対応・デザイン修正版）
 """
 
 import os
@@ -8,7 +8,7 @@ import sendgrid
 from sendgrid.helpers.mail import Mail, Email, To, Content
 from datetime import datetime, timedelta, timezone
 
-VERSION = "v5.3-20260121"
+VERSION = "v5.3-20260121-fix"
 
 def create_email_body(stock_results):
     """HTMLメール本文を生成"""
@@ -75,57 +75,11 @@ def create_email_body(stock_results):
                         </tr>
         """
         
-        # ① 投資判断補助ニュース（v5.3新機能）
-        if investment_aux:
-            phase_color = "#16a34a" # デフォルト緑
-            if "下落" in investment_aux.get('phase', ''):
-                phase_color = "#dc2626" # 赤
-            elif "調整" in investment_aux.get('phase', ''):
-                phase_color = "#ca8a04" # 黄
-                
-            html += f"""
-                        <tr>
-                            <td style="padding:16px 24px;">
-                                <table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f0fdf4" style="border:1px solid #bbf7d0; border-radius:8px;">
-                                    <tr>
-                                        <td style="padding:16px;">
-                                            <font face="Helvetica, Arial, sans-serif" size="3" color="#166534" style="font-weight:bold;">
-                                                📉 投資判断補助（株価フェーズ整理）
-                                            </font>
-                                            <div style="margin-top:12px; margin-bottom:12px; border-left:4px solid {phase_color}; padding-left:12px;">
-                                                <font face="Helvetica, Arial, sans-serif" size="4" color="#0f172a" style="font-weight:bold;">
-                                                    {investment_aux.get('phase', '判定不能')}
-                                                </font>
-                                            </div>
-                                            <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:8px;">
-                                                <tr>
-                                                    <td width="30%" valign="top" style="padding-right:12px;">
-                                                        <font face="Helvetica, Arial, sans-serif" size="2" color="#64748b">直近変動</font><br>
-                                                        <font face="Helvetica, Arial, sans-serif" size="3" color="#0f172a">{investment_aux.get('change_summary', '-')}</font>
-                                                    </td>
-                                                    <td width="70%" valign="top">
-                                                        <font face="Helvetica, Arial, sans-serif" size="2" color="#64748b">ニュースとの関係性</font><br>
-                                                        <font face="Helvetica, Arial, sans-serif" size="3" color="#0f172a">{investment_aux.get('news_relation', '-')}</font>
-                                                    </td>
-                                                </tr>
-                                            </table>
-                                            <div style="margin-top:12px; padding-top:12px; border-top:1px dashed #bbf7d0;">
-                                                <font face="Helvetica, Arial, sans-serif" size="2" color="#15803d">
-                                                    <b>💡 注意点:</b> {investment_aux.get('caution', '-')}
-                                                </font>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                </table>
-                            </td>
-                        </tr>
-            """
-            
-        # ② 企業ニュース（クラスタリング表示）
+        # ① 企業ニュース（クラスタリング表示） - 先に表示
         if news_list:
             html += """
                         <tr>
-                            <td style="padding:0 24px 24px 24px;">
+                            <td style="padding:16px 24px 0 24px;">
                                 <font face="Helvetica, Arial, sans-serif" size="2" color="#64748b" style="font-weight:bold; text-transform:uppercase; letter-spacing:1px;">
                                     Latest News
                                 </font>
@@ -164,7 +118,7 @@ def create_email_body(stock_results):
                                     <div style="margin-top:12px; padding-left:12px; border-left:2px solid #e2e8f0;">
                                         <font face="Helvetica, Arial, sans-serif" size="2" color="#64748b">関連情報:</font>
                                         <ul style="margin:4px 0 0 0; padding-left:20px; color:#475569; font-family:Helvetica, Arial, sans-serif; font-size:13px;">
-                    """
+                                    """
                     for supp in supp_news:
                         html += f"""
                                             <li style="margin-bottom:4px;">
@@ -184,12 +138,63 @@ def create_email_body(stock_results):
                         </tr>
             """
         else:
+            # ニュースがない場合もスペースを空ける（あるいはメッセージを表示）
             html += """
                         <tr>
-                            <td style="padding:0 24px 24px 24px;">
-                                <font face="Helvetica, Arial, sans-serif" size="3" color="#94a3b8">
-                                    ※ 直近の重要ニュースはありませんでした。
+                            <td style="padding:16px 24px 0 24px;">
+                                <font face="Helvetica, Arial, sans-serif" size="2" color="#64748b" style="font-weight:bold; text-transform:uppercase; letter-spacing:1px;">
+                                    Latest News
                                 </font>
+                                <div style="margin-top:12px; margin-bottom:24px;">
+                                    <font face="Helvetica, Arial, sans-serif" size="3" color="#94a3b8">
+                                        ※ 直近の重要ニュースはありませんでした。
+                                    </font>
+                                </div>
+                            </td>
+                        </tr>
+            """
+
+        # ② 投資判断補助ニュース（v5.3新機能） - 後に表示、デザインをフラット化
+        if investment_aux:
+            phase_color = "#16a34a" # デフォルト緑
+            if "下落" in investment_aux.get('phase', ''):
+                phase_color = "#dc2626" # 赤
+            elif "調整" in investment_aux.get('phase', ''):
+                phase_color = "#ca8a04" # 黄
+                
+            html += f"""
+                        <tr>
+                            <td style="padding:0 24px 24px 24px;">
+                                <div style="border-top:1px solid #e2e8f0; margin-bottom:16px;"></div>
+                                <font face="Helvetica, Arial, sans-serif" size="2" color="#64748b" style="font-weight:bold; text-transform:uppercase; letter-spacing:1px;">
+                                    Market Phase Analysis
+                                </font>
+                                <div style="margin-top:12px;">
+                                    <div style="margin-bottom:12px; border-left:4px solid {phase_color}; padding-left:12px;">
+                                        <font face="Helvetica, Arial, sans-serif" size="4" color="#0f172a" style="font-weight:bold;">
+                                            {investment_aux.get('phase', '判定不能')}
+                                        </font>
+                                    </div>
+                                    
+                                    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:12px;">
+                                        <tr>
+                                            <td width="30%" valign="top" style="padding-right:12px;">
+                                                <font face="Helvetica, Arial, sans-serif" size="2" color="#64748b">直近変動</font><br>
+                                                <font face="Helvetica, Arial, sans-serif" size="3" color="#0f172a">{investment_aux.get('change_summary', '-')}</font>
+                                            </td>
+                                            <td width="70%" valign="top">
+                                                <font face="Helvetica, Arial, sans-serif" size="2" color="#64748b">ニュースとの関係性</font><br>
+                                                <font face="Helvetica, Arial, sans-serif" size="3" color="#0f172a">{investment_aux.get('news_relation', '-')}</font>
+                                            </td>
+                                        </tr>
+                                    </table>
+                                    
+                                    <div style="margin-top:12px; padding-top:12px;">
+                                        <font face="Helvetica, Arial, sans-serif" size="2" color="#15803d">
+                                            <b>💡 注意点:</b> {investment_aux.get('caution', '-')}
+                                        </font>
+                                    </div>
+                                </div>
                             </td>
                         </tr>
             """
