@@ -648,8 +648,8 @@ def main():
     else:
         print("⚠️ RECIPIENT_EMAIL が設定されていないため送信スキップ")
             
-    else:
-        print("❌ 配信対象ニュースがありませんでした")
+else:
+    print("❌ 配信対象ニュースがありませんでした")
 
     elapsed = time.time() - start_time
     print(f"⏱️ 処理時間: {elapsed:.2f}秒")
