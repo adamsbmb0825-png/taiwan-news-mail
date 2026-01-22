@@ -191,14 +191,15 @@ def force_pick_news(candidates, stock_info):
                 print(f"  ⚠️ FORCED PICK used: {stock_info['name']} reason=Keyword match ({kw}) url={entry['link']}", flush=True)
                 return {
                     **entry,
-                    'llm_result': {
-                        'is_relevant': True,
-                        'reason': f"【自動補完】重要キーワード「{kw}」を含むため強制採用",
-                        'summary': f"【自動補完】{entry['title']}（{kw}関連）",
-                        'importance': 3
-                    },
-                    'forced_pick': True
-                }
+                'llm_result': {
+                    'is_relevant': True,
+                    'reason': f"【自動補完】重要キーワード「{kw}」を含むため強制採用",
+                    'summary': f"【自動補完】{entry['title']}（{kw}関連）",
+                    'importance': 3,
+                    'representative_reason': f"重要キーワード「{kw}」を含むため"
+                },
+                'forced_pick': True
+            }
 
     # 2. タイトルに銘柄名が含まれるものを探す
     for entry in candidates:
@@ -210,7 +211,8 @@ def force_pick_news(candidates, stock_info):
                     'is_relevant': True,
                     'reason': "【自動補完】タイトルに銘柄名を含むため強制採用",
                     'summary': f"【自動補完】{entry['title']}",
-                    'importance': 3
+                    'importance': 3,
+                    'representative_reason': "タイトルに銘柄名を含むため"
                 },
                 'forced_pick': True
             }
@@ -224,7 +226,8 @@ def force_pick_news(candidates, stock_info):
             'is_relevant': True,
             'reason': "【自動補完】関連ニュース不足のため最新記事を採用",
             'summary': f"【自動補完】{entry['title']}",
-            'importance': 1
+            'importance': 1,
+            'representative_reason': "最新記事のため"
         },
         'forced_pick': True
     }
