@@ -197,7 +197,7 @@ def print_clustering_log(stock_name, clustering_result):
         print(f"\n  クラスタ {cluster['cluster_id']}: {cluster['theme']}")
         if cluster['representative']:
             print(f"    代表: {cluster['representative']['title'][:60]}...")
-            print(f"    理由: {cluster['representative_reason']}")
+            print(f"    理由: {cluster.get('representative_reason', '理由なし')}")
         print(f"    補足: {len(cluster['supplementary'])}件")
         for i, supp in enumerate(cluster['supplementary']):
             perspective = cluster['supplementary_perspectives'][i] if i < len(cluster['supplementary_perspectives']) else '追加情報'
