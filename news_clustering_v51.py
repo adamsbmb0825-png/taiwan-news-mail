@@ -176,7 +176,7 @@ def prepare_delivery_news(clustering_result, max_clusters=3):
         if cluster['representative']:
             news_item = cluster['representative'].copy()
             news_item['cluster_theme'] = cluster['theme']
-            news_item['representative_reason'] = cluster['representative_reason']
+            news_item['representative_reason'] = cluster.get('representative_reason', '理由なし')
             news_item['supplementary_news'] = cluster['supplementary']
             news_item['supplementary_perspectives'] = cluster['supplementary_perspectives']
             delivery_news.append(news_item)
