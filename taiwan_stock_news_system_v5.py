@@ -36,7 +36,8 @@ JST = timezone(timedelta(hours=9))
 # 銘柄リスト読み込み
 try:
     with open("stocks.json", "r", encoding="utf-8") as f:
-        STOCKS = json.load(f)
+        json_data = json.load(f)
+        STOCKS = json_data.get("stocks", {})
 except FileNotFoundError:
     print("❌ stocks.json が見つかりません。")
     sys.exit(1)
