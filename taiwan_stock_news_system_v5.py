@@ -615,7 +615,7 @@ def main():
 
     # 3. メール作成・送信
     if results:
-        from email_template_v5 import create_email_body
+        from email_template_v5 import generate_html_email as create_email_body
         
         # テンプレートに渡すデータを整形
         # email_template_v5.py は {stock_id: {'news': [...]}} を期待しているはず
