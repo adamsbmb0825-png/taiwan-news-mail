@@ -200,5 +200,6 @@ def print_clustering_log(stock_name, clustering_result):
             print(f"    理由: {cluster.get('representative_reason', '理由なし')}")
         print(f"    補足: {len(cluster['supplementary'])}件")
         for i, supp in enumerate(cluster['supplementary']):
-            perspective = cluster['supplementary_perspectives'][i] if i < len(cluster['supplementary_perspectives']) else '追加情報'
+            perspectives = cluster.get('supplementary_perspectives', [])
+            perspective = perspectives[i] if i < len(perspectives) else '追加情報'
             print(f"      - [{perspective}] {supp['title'][:50]}...")
