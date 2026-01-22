@@ -496,6 +496,7 @@ def process_stock_news(stock_id, stock_info, all_news, cache, fallback_mode=Fals
         
         if is_relevant:
             news['relevance_reason'] = "キーワードマッチにより関連ありと判定"
+            news['relevance_score'] = 80  # デフォルトスコア
             relevant_news.append(news)
             # print(f"  ✅ 関連あり: {news['title'][:20]}...")
         else:
