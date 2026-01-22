@@ -298,7 +298,8 @@ def process_stock_news(stock_code, stock_info, all_entries, is_fallback_mode=Fal
         # 引数順序修正: (stock_name, relevant_news)
         clusters = cluster_news_by_topic(stock_info['name'], relevant_news)
         print_clustering_log(stock_info['name'], clusters)
-        clustered_news = prepare_delivery_news(clusters)
+        # テンプレートはクラスタ構造を期待しているため、prepare_delivery_newsを通さず直接渡す
+        clustered_news = clusters['clusters']
         print(f"✅ 配信: {len(clustered_news)}クラスタ", flush=True)
     
     # 4. 投資判断補助ニュース生成（v5.3新機能）
