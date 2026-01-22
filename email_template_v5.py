@@ -1,234 +1,189 @@
 # -*- coding: utf-8 -*-
 """
-HTMLメールテンプレート生成関数 v5.3（投資判断補助ニュース対応・デザイン修正版）
-- 二重枠（カード in カード）の完全撤去
-- 企業ニュースと投資判断補助ニュースのフラット化
-- テンプレートバージョン表示
+HTMLメールテンプレート生成関数 v5.3 (v5.1完全復元版)
+- ダークモードベース
+- 「本日の論点」（オレンジ）、「分析スコア」（緑）などの多層ボックス構造を復元
+- 投資判断補助ニュースを既存ニュースと同じフォーマットで追加
 """
 
 import os
 import sendgrid
-from sendgrid.helpers.mail import Mail, Email, To, Content
+from sendgrid.helpers.mail import Mail
 from datetime import datetime, timedelta, timezone
 
-VERSION = "v5.3-20260122-flat-design"
+# 識別用コメント（ログ出力用）
+TEMPLATE_ID = "v5.3-restored-dark-v5.1"
 
 def create_email_body(stock_results):
-    """HTMLメール本文を生成"""
+    """HTMLメール本文を生成（v5.1デザイン復元）"""
     
-    taipei_time = datetime.now(timezone(timedelta(hours=8))).strftime('%Y/%m/%d %H:%M')
+    taipei_time = datetime.now(timezone(timedelta(hours=8))).strftime('%Y年%m月%d日 %H:%M')
     
-    # HTMLヘッダー
+    # HTMLヘッダー（ダークモード）
     html = """
     <html>
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+            body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; background-color: #121212; color: #e0e0e0; margin: 0; padding: 0; }
+            .container { max-width: 600px; margin: 0 auto; background-color: #1e1e1e; }
+            .header { background-color: #0056b3; padding: 20px; color: #ffffff; }
+            .stock-section { padding: 20px; border-bottom: 1px solid #333; }
+            .stock-title { font-size: 24px; font-weight: bold; color: #ffffff; margin-bottom: 5px; }
+            .stock-meta { font-size: 12px; color: #aaaaaa; margin-bottom: 15px; }
+            
+            /* 論点ボックス（オレンジ） */
+            .point-box { background-color: #3d2b1f; border-left: 4px solid #d97706; padding: 15px; margin-bottom: 20px; border-radius: 4px; }
+            .point-title { color: #fbbf24; font-weight: bold; font-size: 14px; margin-bottom: 5px; }
+            .point-text { color: #e0e0e0; font-size: 14px; line-height: 1.6; }
+            
+            /* ニュースアイテム */
+            .news-item { margin-bottom: 30px; }
+            
+            /* テーマバー（青） */
+            .theme-bar { background-color: #1e3a8a; color: #bfdbfe; padding: 5px 10px; font-size: 12px; font-weight: bold; display: inline-block; border-radius: 3px; margin-bottom: 10px; }
+            
+            /* ニュースタイトル */
+            .news-title-jp { font-size: 16px; font-weight: bold; color: #ffffff; margin-bottom: 4px; line-height: 1.4; }
+            .news-title-tw { font-size: 12px; color: #9ca3af; margin-bottom: 10px; }
+            
+            /* 分析ボックス（緑） */
+            .analysis-box { background-color: #143323; border-left: 4px solid #22c55e; padding: 15px; margin-bottom: 15px; border-radius: 4px; }
+            .analysis-label { color: #86efac; font-size: 11px; font-weight: bold; margin-bottom: 5px; text-transform: uppercase; }
+            .analysis-text { color: #d1fae5; font-size: 13px; line-height: 1.6; }
+            
+            /* 補足ボックス（グレー） */
+            .supp-box { background-color: #262626; border-left: 4px solid #525252; padding: 12px; margin-top: 10px; border-radius: 4px; }
+            .supp-title { color: #a3a3a3; font-size: 11px; font-weight: bold; margin-bottom: 5px; }
+            .supp-text { color: #d4d4d4; font-size: 12px; line-height: 1.5; }
+            
+            /* リンク */
+            a { color: #3b82f6; text-decoration: none; }
+            a:hover { text-decoration: underline; }
+            
+            /* フッター */
+            .footer { background-color: #000000; padding: 20px; text-align: center; font-size: 11px; color: #666; }
+        </style>
     </head>
-    <body style="margin:0; padding:0; background-color:#f3f4f6;">
-        <table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f3f4f6">
-            <tr>
-                <td align="center" style="padding:20px;">
-                    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:800px; background-color:#ffffff; border-radius:8px; overflow:hidden; box-shadow:0 4px 6px rgba(0,0,0,0.1);">
-    """
-    
-    # ヘッダー
-    html += f"""
-                        <!-- ヘッダー -->
-                        <tr>
-                            <td bgcolor="#1e293b" style="padding:24px;">
-                                <table width="100%" cellpadding="0" cellspacing="0" border="0">
-                                    <tr>
-                                        <td>
-                                            <font face="Helvetica, Arial, sans-serif" size="5" color="#ffffff" style="font-weight:bold; letter-spacing:0.5px;">
-                                                🇹🇼 台湾株 投資判断レポート
-                                            </font>
-                                        </td>
-                                        <td align="right">
-                                            <font face="Helvetica, Arial, sans-serif" size="2" color="#94a3b8">
-                                                {taipei_time} (TST)
-                                            </font>
-                                        </td>
-                                    </tr>
-                                </table>
-                            </td>
-                        </tr>
+    <body>
+        <div class="container">
+            <!-- ヘッダー -->
+            <div class="header">
+                <div style="font-size: 20px; font-weight: bold;">🇹🇼 台湾株ニュース配信</div>
+                <div style="font-size: 12px; opacity: 0.8; margin-top: 5px;">{taipei_time}</div>
+            </div>
     """
     
     # 各銘柄のループ
     for stock_code, result in stock_results.items():
         stock_name = result['stock_name']
         news_list = result.get('news', [])
-        investment_aux = result.get('investment_aux', {})
+        
+        # ニュースクラスタ数（投資判断補助を含む）
+        cluster_count = len(news_list)
         
         html += f"""
-                        <!-- 銘柄セクション: {stock_name} -->
-                        <tr>
-                            <td style="padding:24px 24px 0 24px;">
-                                <table width="100%" cellpadding="0" cellspacing="0" border="0">
-                                    <tr>
-                                        <td style="border-bottom:2px solid #e2e8f0; padding-bottom:12px;">
-                                            <font face="Helvetica, Arial, sans-serif" size="5" color="#0f172a" style="font-weight:bold;">
-                                                {stock_name} <span style="color:#64748b; font-size:18px;">({stock_code})</span>
-                                            </font>
-                                        </td>
-                                    </tr>
-                                </table>
-                            </td>
-                        </tr>
+            <div class="stock-section">
+                <div class="stock-title">{stock_name} ({stock_code})</div>
+                <div class="stock-meta">ニュースクラスタ数: {cluster_count}個</div>
         """
         
-        # ① 企業ニュース（クラスタリング表示） - 先に表示
+        # 本日の論点（最初のニュースの要約などを論点として表示する簡易ロジック）
+        # ※本来は全ニュースから生成するが、ここでは最初のニュースの要約を使用
         if news_list:
-            html += """
-                        <tr>
-                            <td style="padding:16px 24px 0 24px;">
-                                <font face="Helvetica, Arial, sans-serif" size="2" color="#64748b" style="font-weight:bold; text-transform:uppercase; letter-spacing:1px;">
-                                    Latest News
-                                </font>
+            top_news = news_list[0]['representative']
+            point_text = top_news.get('llm_result', {}).get('summary', '特になし')
+            
+            html += f"""
+                <div class="point-box">
+                    <div class="point-title">💡 本日の論点:</div>
+                    <div class="point-text">{point_text}</div>
+                </div>
             """
             
-            for cluster in news_list:
-                theme = cluster.get('theme', 'No Theme')
-                rep_news = cluster.get('representative', {})
-                supp_news = cluster.get('supplementary', [])
-                
-                # 強制採用フラグの確認
-                is_forced = rep_news.get('forced_pick', False)
-                forced_badge = ""
-                if is_forced:
-                    forced_badge = '<span style="background-color:#fef3c7; color:#d97706; font-size:11px; padding:2px 4px; border-radius:3px; margin-left:8px;">Auto-Pick</span>'
-                
-                html += f"""
-                                <div style="margin-top:12px; margin-bottom:24px;">
-                                    <font face="Helvetica, Arial, sans-serif" size="3" color="#0f172a" style="font-weight:bold; background:linear-gradient(to right, #e0f2fe, #ffffff); padding:4px 8px; border-radius:4px;">
-                                        📌 {theme}
-                                    </font>
-                                    <div style="margin-top:8px;">
-                                        <a href="{rep_news.get('link', '#')}" style="text-decoration:none; color:#0284c7; font-weight:bold; font-family:Helvetica, Arial, sans-serif; font-size:16px;">
-                                            {rep_news.get('title', 'No Title')}
-                                        </a>
-                                        {forced_badge}
-                                        <div style="margin-top:4px;">
-                                            <font face="Helvetica, Arial, sans-serif" size="2" color="#64748b">
-                                                {rep_news.get('source', 'Unknown')} • {rep_news.get('published', '').strftime('%m/%d %H:%M') if hasattr(rep_news.get('published'), 'strftime') else '-'}
-                                            </font>
-                                        </div>
-                                        <div style="margin-top:8px; line-height:1.6;">
-                                            <font face="Helvetica, Arial, sans-serif" size="3" color="#334155">
-                                                {rep_news.get('llm_result', {}).get('summary', '')}
-                                            </font>
-                                        </div>
-                                    </div>
+        # ニュースリスト
+        for cluster in news_list:
+            theme = cluster.get('theme', 'No Theme')
+            rep_news = cluster.get('representative', {})
+            supp_news = cluster.get('supplementary', [])
+            
+            # LLM結果
+            llm_res = rep_news.get('llm_result', {})
+            summary = llm_res.get('summary', '')
+            reason = llm_res.get('reason', '')
+            
+            # タイトル（日本語・繁体字）
+            # ※投資判断補助の場合、繁体字タイトルはないので日本語を再利用または空にする
+            title_jp = rep_news.get('title', 'No Title')
+            title_tw = rep_news.get('title_tw', title_jp) # 繁体字がなければ日本語
+            
+            # 投資判断補助かどうかの判定（テーマ名で簡易判定）
+            is_aux = "投資判断補助" in theme
+            
+            # リンク
+            link = rep_news.get('link', '#')
+            
+            # 日付
+            pub_date = rep_news.get('published', '')
+            if hasattr(pub_date, 'strftime'):
+                pub_date_str = pub_date.strftime('%Y-%m-%d %H:%M')
+            else:
+                pub_date_str = str(pub_date)
+
+            html += f"""
+                <div class="news-item">
+                    <div class="theme-bar">{theme}</div>
+                    
+                    <div class="news-title-jp">
+                        <a href="{link}" style="color:#ffffff; text-decoration:none;">{title_jp}</a>
+                    </div>
+                    <div class="news-title-tw">{title_tw}</div>
+                    
+                    <!-- 分析ボックス（緑） -->
+                    <div class="analysis-box">
+                        <div class="analysis-label">関連スコア / 投資判断</div>
+                        <div class="analysis-text">
+                            {summary}
+                        </div>
+                        <div style="margin-top:8px; font-size:11px; color:#6ee7b7;">
+                            📅 {pub_date_str}
+                        </div>
+                    </div>
+            """
+            
+            # 補足ニュース（あれば）
+            if supp_news:
+                html += """
+                    <div class="supp-box">
+                        <div class="supp-title">補足視点</div>
+                        <ul style="margin:0; padding-left:20px; color:#d4d4d4; font-size:12px;">
+                """
+                for supp in supp_news:
+                    s_title = supp.get('title', '')
+                    s_link = supp.get('link', '#')
+                    html += f"""
+                        <li style="margin-bottom:4px;">
+                            <a href="{s_link}" style="color:#a3a3a3;">{s_title}</a>
+                        </li>
+                    """
+                html += """
+                        </ul>
+                    </div>
                 """
                 
-                # 補足ニュース
-                if supp_news:
-                    html += """
-                                    <div style="margin-top:12px; padding-left:12px; border-left:2px solid #e2e8f0;">
-                                        <font face="Helvetica, Arial, sans-serif" size="2" color="#64748b">関連情報:</font>
-                                        <ul style="margin:4px 0 0 0; padding-left:20px; color:#475569; font-family:Helvetica, Arial, sans-serif; font-size:13px;">
-                                    """
-                    for supp in supp_news:
-                        html += f"""
-                                            <li style="margin-bottom:4px;">
-                                                {supp.get('llm_result', {}).get('summary', supp.get('title', ''))}
-                                                <a href="{supp.get('link', '#')}" style="color:#94a3b8; text-decoration:none;">[Link]</a>
-                                            </li>
-                        """
-                    html += """
-                                        </ul>
-                                    </div>
-                    """
-                
-                html += "</div>"
-                
-            html += """
-                            </td>
-                        </tr>
-            """
-        else:
-            # ニュースがない場合（強制採用も失敗した場合）
-            html += """
-                        <tr>
-                            <td style="padding:16px 24px 0 24px;">
-                                <font face="Helvetica, Arial, sans-serif" size="2" color="#64748b" style="font-weight:bold; text-transform:uppercase; letter-spacing:1px;">
-                                    Latest News
-                                </font>
-                                <div style="margin-top:12px; margin-bottom:24px;">
-                                    <font face="Helvetica, Arial, sans-serif" size="3" color="#94a3b8">
-                                        ※ 直近の重要ニュースはありませんでした。
-                                    </font>
-                                </div>
-                            </td>
-                        </tr>
-            """
-
-        # ② 投資判断補助ニュース（v5.3新機能） - 後に表示、デザインを完全フラット化
-        if investment_aux:
-            phase_color = "#16a34a" # デフォルト緑
-            if "下落" in investment_aux.get('phase', ''):
-                phase_color = "#dc2626" # 赤
-            elif "調整" in investment_aux.get('phase', ''):
-                phase_color = "#ca8a04" # 黄
-                
-            html += f"""
-                        <tr>
-                            <td style="padding:0 24px 24px 24px;">
-                                <!-- 区切り線のみ -->
-                                <div style="border-top:1px solid #e2e8f0; margin-bottom:16px;"></div>
-                                
-                                <font face="Helvetica, Arial, sans-serif" size="2" color="#64748b" style="font-weight:bold; text-transform:uppercase; letter-spacing:1px;">
-                                    Market Phase Analysis
-                                </font>
-                                
-                                <!-- 背景色なし、ボーダーなしのフラットな表示 -->
-                                <div style="margin-top:12px;">
-                                    <div style="margin-bottom:12px; border-left:4px solid {phase_color}; padding-left:12px;">
-                                        <font face="Helvetica, Arial, sans-serif" size="4" color="#0f172a" style="font-weight:bold;">
-                                            {investment_aux.get('phase', '判定不能')}
-                                        </font>
-                                    </div>
-                                    
-                                    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:12px;">
-                                        <tr>
-                                            <td width="30%" valign="top" style="padding-right:12px;">
-                                                <font face="Helvetica, Arial, sans-serif" size="2" color="#64748b">直近変動</font><br>
-                                                <font face="Helvetica, Arial, sans-serif" size="3" color="#0f172a">{investment_aux.get('change_summary', '-')}</font>
-                                            </td>
-                                            <td width="70%" valign="top">
-                                                <font face="Helvetica, Arial, sans-serif" size="2" color="#64748b">ニュースとの関係性</font><br>
-                                                <font face="Helvetica, Arial, sans-serif" size="3" color="#0f172a">{investment_aux.get('news_relation', '-')}</font>
-                                            </td>
-                                        </tr>
-                                    </table>
-                                    
-                                    <div style="margin-top:12px; padding-top:12px;">
-                                        <font face="Helvetica, Arial, sans-serif" size="2" color="#15803d">
-                                            <b>💡 注意点:</b> {investment_aux.get('caution', '-')}
-                                        </font>
-                                    </div>
-                                </div>
-                            </td>
-                        </tr>
-            """
+            html += "</div>" # End news-item
+            
+        html += "</div>" # End stock-section
 
     # フッター
-    html += f"""
-                        <tr>
-                            <td bgcolor="#f8fafc" style="padding:24px; border-top:1px solid #e2e8f0; text-align:center;">
-                                <font face="Helvetica, Arial, sans-serif" size="2" color="#94a3b8">
-                                    本メールは自動配信システムによって生成されています。<br>
-                                    投資判断は自己責任で行ってください。<br>
-                                    TEMPLATE_VERSION: {VERSION}<br>
-                                    &copy; 2026 Taiwan Stock News System
-                                </font>
-                            </td>
-                        </tr>
-                    </table>
-                </td>
-            </tr>
-        </table>
+    html += """
+            <div class="footer">
+                本メールは自動配信システムによって生成されています。<br>
+                投資判断は自己責任で行ってください。<br>
+                &copy; 2026 Taiwan Stock News System
+            </div>
+        </div>
     </body>
     </html>
     """
