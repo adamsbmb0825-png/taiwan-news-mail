@@ -628,25 +628,25 @@ def main():
     with open('email_preview.html', 'w', encoding='utf-8') as f:
         f.write(html_content)
     print("💾 プレビューを保存しました: email_preview.html")
+    
+    # 送信
+    recipient = os.environ.get('RECIPIENT_EMAIL')
+    if recipient:
+        message = Mail(
+            from_email=recipient, # 自分自身に送る（SendGrid Sender Identity回避）
+            to_emails=recipient,
+            subject=f"🇹🇼 台湾株ニュース配信 {datetime.now(TW_TZ).strftime('%Y/%m/%d')}",
+            html_content=html_content
+        )
         
-        # 送信
-        recipient = os.environ.get('RECIPIENT_EMAIL')
-        if recipient:
-            message = Mail(
-                from_email=recipient, # 自分自身に送る（SendGrid Sender Identity回避）
-                to_emails=recipient,
-                subject=f"🇹🇼 台湾株ニュース配信 {datetime.now(TW_TZ).strftime('%Y/%m/%d')}",
-                html_content=html_content
-            )
-            
-            try:
-                sg = SendGridAPIClient(os.environ.get('SENDGRID_API_KEY'))
-                response = sg.send(message)
-                print(f"✅ 送信成功！ ステータスコード: {response.status_code}")
-            except Exception as e:
-                print(f"❌ 送信エラー: {e}")
-        else:
-            print("⚠️ RECIPIENT_EMAIL が設定されていないため送信スキップ")
+        try:
+            sg = SendGridAPIClient(os.environ.get('SENDGRID_API_KEY'))
+            response = sg.send(message)
+            print(f"✅ 送信成功！ ステータスコード: {response.status_code}")
+        except Exception as e:
+            print(f"❌ 送信エラー: {e}")
+    else:
+        print("⚠️ RECIPIENT_EMAIL が設定されていないため送信スキップ")
             
     else:
         print("❌ 配信対象ニュースがありませんでした")
