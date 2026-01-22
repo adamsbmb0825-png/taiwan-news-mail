@@ -509,7 +509,11 @@ def process_stock_news(stock_id, stock_info, all_news, cache, fallback_mode=Fals
 
     # 3. クラスタリング・要約（v5.1のロジック再利用）
     # ここで日本語翻訳と要約が行われる
-    clustered_news = cluster_news_by_topic(relevant_news, stock_id, stock_info)
+    clustering_result = cluster_news_by_topic(stock_info['name'], relevant_news)
+    clustered_news = prepare_delivery_news(clustering_result)
+    
+    # ログ出力
+    print_clustering_log(stock_info['name'], clustering_result)
     
     # 4. 投資判断補助ニュース生成・追加（新規）
     # 既存のニュースリストの末尾に、ニュースと同じフォーマットで追加する
