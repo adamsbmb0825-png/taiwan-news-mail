@@ -42,10 +42,11 @@ def cluster_news_by_topic(stock_name, relevant_news):
     
     # ニューステキストを準備
     news_text = "\n\n".join([
-        f"[{i+1}] タイトル: {news.get('title', '')}\n"
-        f"    出典: {news.get('source', news.get('publisher', 'Unknown'))}\n"
-        f"    概要: {news.get('llm_result', {}).get('summary', news.get('summary', news.get('snippet', '')))}\n"
-        f"    判定理由: {news.get('llm_result', {}).get('reason', news.get('relevance_reason', ''))}"
+        f"[{i+1}] タイトル: {news['title']}\n"
+        f"    出典: {news['publisher']}\n"
+        f"    概要: {news['snippet']}\n"
+        f"    関連性スコア: {news['relevance_score']}\n"
+        f"    判定理由: {news['relevance_reason']}"
         for i, news in enumerate(relevant_news)
     ])
     
@@ -196,7 +197,7 @@ def print_clustering_log(stock_name, clustering_result):
         print(f"\n  クラスタ {cluster['cluster_id']}: {cluster['theme']}")
         if cluster['representative']:
             print(f"    代表: {cluster['representative']['title'][:60]}...")
-            print(f"    理由: {cluster.get('representative_reason', '理由なし')}")
+            print(f"    理由: {cluster['representative_reason']}")
         print(f"    補足: {len(cluster['supplementary'])}件")
         for i, supp in enumerate(cluster['supplementary']):
             perspective = cluster['supplementary_perspectives'][i] if i < len(cluster['supplementary_perspectives']) else '追加情報'

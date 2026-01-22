@@ -1,0 +1,29 @@
+{
+  "_comment": "台湾株ニュース配信システム v5.0 設定ファイル",
+  "_instructions": [
+    "このファイルは正本（Single Source of Truth）の設定を管理します。",
+    "script_pathで指定されたスクリプトが見つからない場合、システムは停止します。",
+    "再生成は禁止されています。"
+  ],
+  
+  "version": "v5.0.2026011201",
+  "spec_version": "v5.0-20260111",
+  "script_path": "/home/ubuntu/taiwan_stock_news_system_v5.py",
+  "template_path": "/home/ubuntu/email_template_v5.py",
+  "stocks_path": "/home/ubuntu/stocks.json",
+  "cache_path": "/home/ubuntu/.taiwan_stock_news_cache_v5.json",
+  
+  "cache_policy": {
+    "news_retention_days": 30,
+    "topic_retention_days": 10,
+    "clear_on_demand": true,
+    "preserve_templates": true,
+    "preserve_profiles": true,
+    "preserve_rules": true
+  },
+  
+  "regeneration_policy": {
+    "allowed": false,
+    "action_on_missing": "stop_and_report"
+  }
+}
