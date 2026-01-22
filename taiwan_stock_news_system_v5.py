@@ -19,7 +19,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from bs4 import BeautifulSoup
 from openai import OpenAI
 from email_template_v5 import create_email_body, send_email_via_sendgrid
-from news_clustering_v51 import cluster_news_by_topic, prepare_delivery_news, print_clustering_log
+from news_clustering import cluster_news_by_topic, prepare_delivery_news, print_clustering_log
 from delayed_valuable_news import is_delayed_but_valuable
 from stock_price_analyzer import get_stock_price_data
 from investment_aux_generator import generate_investment_aux_news
