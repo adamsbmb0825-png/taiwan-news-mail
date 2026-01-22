@@ -622,11 +622,12 @@ def main():
         # 確認: email_template_v5.py の create_email_body(news_data)
       # メール本文作成
     taipei_now = datetime.now(TW_TZ).strftime('%Y-%m-%d %H:%M')
-    html_content = create_email_body(results, taipei_now)      
-        # プレビュー保存
-        with open('email_preview.html', 'w', encoding='utf-8') as f:
-            f.write(html_content)
-        print("💾 プレビューを保存しました: email_preview.html")
+    html_content = create_email_body(results, taipei_now)
+    
+    # プレビュー保存
+    with open('email_preview.html', 'w', encoding='utf-8') as f:
+        f.write(html_content)
+    print("💾 プレビューを保存しました: email_preview.html")
         
         # 送信
         recipient = os.environ.get('RECIPIENT_EMAIL')
