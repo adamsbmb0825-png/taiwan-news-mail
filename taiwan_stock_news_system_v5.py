@@ -491,10 +491,11 @@ def process_stock_news(stock_id, stock_info, all_news, cache, fallback_mode=Fals
         # ※実装簡略化のため、ここでは毎回判定（delayed_valuable_news内でキャッシュ機構あればよいが）
         # 今回は直接 is_delayed_valuable_news を呼ぶ
         
-        is_relevant, reason = is_delayed_valuable_news(news, stock_id, stock_info)
+        # 簡易判定（キーワードマッチ）
+        is_relevant = is_delayed_valuable_news(news['title'], news['snippet'])
         
         if is_relevant:
-            news['relevance_reason'] = reason
+            news['relevance_reason'] = "キーワードマッチにより関連ありと判定"
             relevant_news.append(news)
             # print(f"  ✅ 関連あり: {news['title'][:20]}...")
         else:
