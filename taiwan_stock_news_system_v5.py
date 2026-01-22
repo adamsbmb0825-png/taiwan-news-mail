@@ -620,9 +620,9 @@ def main():
         # テンプレートに渡すデータを整形
         # email_template_v5.py は {stock_id: {'news': [...]}} を期待しているはず
         # 確認: email_template_v5.py の create_email_body(news_data)
-        
-        html_content = create_email_body(results)
-        
+      # メール本文作成
+    taipei_now = datetime.now(TW_TZ).strftime('%Y-%m-%d %H:%M')
+    html_content = create_email_body(results, taipei_now)      
         # プレビュー保存
         with open('email_preview.html', 'w', encoding='utf-8') as f:
             f.write(html_content)
