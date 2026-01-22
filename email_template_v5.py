@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 """
 HTMLメールテンプレート生成関数 v5.3（投資判断補助ニュース対応・デザイン修正版）
+- 二重枠（カード in カード）の完全撤去
+- 企業ニュースと投資判断補助ニュースのフラット化
+- テンプレートバージョン表示
 """
 
 import os
@@ -8,7 +11,7 @@ import sendgrid
 from sendgrid.helpers.mail import Mail, Email, To, Content
 from datetime import datetime, timedelta, timezone
 
-VERSION = "v5.3-20260121-fix"
+VERSION = "v5.3-20260122-flat-design"
 
 def create_email_body(stock_results):
     """HTMLメール本文を生成"""
@@ -90,6 +93,12 @@ def create_email_body(stock_results):
                 rep_news = cluster.get('representative', {})
                 supp_news = cluster.get('supplementary', [])
                 
+                # 強制採用フラグの確認
+                is_forced = rep_news.get('forced_pick', False)
+                forced_badge = ""
+                if is_forced:
+                    forced_badge = '<span style="background-color:#fef3c7; color:#d97706; font-size:11px; padding:2px 4px; border-radius:3px; margin-left:8px;">Auto-Pick</span>'
+                
                 html += f"""
                                 <div style="margin-top:12px; margin-bottom:24px;">
                                     <font face="Helvetica, Arial, sans-serif" size="3" color="#0f172a" style="font-weight:bold; background:linear-gradient(to right, #e0f2fe, #ffffff); padding:4px 8px; border-radius:4px;">
@@ -99,6 +108,7 @@ def create_email_body(stock_results):
                                         <a href="{rep_news.get('link', '#')}" style="text-decoration:none; color:#0284c7; font-weight:bold; font-family:Helvetica, Arial, sans-serif; font-size:16px;">
                                             {rep_news.get('title', 'No Title')}
                                         </a>
+                                        {forced_badge}
                                         <div style="margin-top:4px;">
                                             <font face="Helvetica, Arial, sans-serif" size="2" color="#64748b">
                                                 {rep_news.get('source', 'Unknown')} • {rep_news.get('published', '').strftime('%m/%d %H:%M') if hasattr(rep_news.get('published'), 'strftime') else '-'}
@@ -138,7 +148,7 @@ def create_email_body(stock_results):
                         </tr>
             """
         else:
-            # ニュースがない場合もスペースを空ける（あるいはメッセージを表示）
+            # ニュースがない場合（強制採用も失敗した場合）
             html += """
                         <tr>
                             <td style="padding:16px 24px 0 24px;">
@@ -154,7 +164,7 @@ def create_email_body(stock_results):
                         </tr>
             """
 
-        # ② 投資判断補助ニュース（v5.3新機能） - 後に表示、デザインをフラット化
+        # ② 投資判断補助ニュース（v5.3新機能） - 後に表示、デザインを完全フラット化
         if investment_aux:
             phase_color = "#16a34a" # デフォルト緑
             if "下落" in investment_aux.get('phase', ''):
@@ -165,10 +175,14 @@ def create_email_body(stock_results):
             html += f"""
                         <tr>
                             <td style="padding:0 24px 24px 24px;">
+                                <!-- 区切り線のみ -->
                                 <div style="border-top:1px solid #e2e8f0; margin-bottom:16px;"></div>
+                                
                                 <font face="Helvetica, Arial, sans-serif" size="2" color="#64748b" style="font-weight:bold; text-transform:uppercase; letter-spacing:1px;">
                                     Market Phase Analysis
                                 </font>
+                                
+                                <!-- 背景色なし、ボーダーなしのフラットな表示 -->
                                 <div style="margin-top:12px;">
                                     <div style="margin-bottom:12px; border-left:4px solid {phase_color}; padding-left:12px;">
                                         <font face="Helvetica, Arial, sans-serif" size="4" color="#0f172a" style="font-weight:bold;">
@@ -200,12 +214,13 @@ def create_email_body(stock_results):
             """
 
     # フッター
-    html += """
+    html += f"""
                         <tr>
                             <td bgcolor="#f8fafc" style="padding:24px; border-top:1px solid #e2e8f0; text-align:center;">
                                 <font face="Helvetica, Arial, sans-serif" size="2" color="#94a3b8">
                                     本メールは自動配信システムによって生成されています。<br>
                                     投資判断は自己責任で行ってください。<br>
+                                    TEMPLATE_VERSION: {VERSION}<br>
                                     &copy; 2026 Taiwan Stock News System
                                 </font>
                             </td>

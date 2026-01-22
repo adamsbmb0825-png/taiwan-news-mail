@@ -1,11 +1,9 @@
-#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-台湾株ニュース配信システム v5.3
-- 2段階フォールバック方式（直近7日 -> 30日）
-- 遅延価値判定モジュール統合
-- ニュースクラスタリング機能（v5.1）
-- 投資判断補助ニュース（株価フェーズ整理）機能（v5.3新機能）
+台湾株ニュース配信システム v5.3 (GitHub正本)
+- 投資判断補助ニュース（株価フェーズ分析）の追加
+- SendGrid送信元アドレスの修正
+- 企業ニュース強制採用ロジック（0件防止）の追加
 """
 
 import os
@@ -24,225 +22,124 @@ from delayed_valuable_news import is_delayed_but_valuable
 from stock_price_analyzer import get_stock_price_data
 from investment_aux_generator import generate_investment_aux_news
 
-# ============================================================
-# 設定・定数
-# ============================================================
+# バージョン情報
+VERSION = "v5.3-20260122-forced-pick"
 
-VERSION = "v5.3-20260121"
+# 環境変数
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
+RECIPIENT_EMAIL = os.getenv("RECIPIENT_EMAIL")
 
-# タイムゾーン設定 (JST)
+# タイムゾーン設定
 JST = timezone(timedelta(hours=9))
 
-# APIキー設定
-SENDGRID_API_KEY = os.environ.get("SENDGRID_API_KEY")
-RECIPIENT_EMAIL = os.environ.get("RECIPIENT_EMAIL")
-
-if not SENDGRID_API_KEY or not RECIPIENT_EMAIL:
-    print("エラー: 環境変数 SENDGRID_API_KEY または RECIPIENT_EMAIL が設定されていません。", flush=True)
+# 銘柄リスト読み込み
+try:
+    with open("stocks.json", "r", encoding="utf-8") as f:
+        STOCKS = json.load(f)
+except FileNotFoundError:
+    print("❌ stocks.json が見つかりません。")
     sys.exit(1)
 
-# OpenAI クライアント初期化
-client = OpenAI()
-
-# 銘柄リスト読み込み
-def load_stocks():
-    try:
-        with open('stocks.json', 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            # "stocks" キーがある場合はその中身を返す、なければそのまま返す（互換性維持）
-            return data.get('stocks', data)
-    except FileNotFoundError:
-        print("エラー: stocks.json が見つかりません。", flush=True)
-        return {}
-    except json.JSONDecodeError as e:
-        print(f"エラー: stocks.json の形式が不正です: {e}", flush=True)
-        return {}
-
-STOCKS = load_stocks()
-
-# RSSフィード（v5.2-lite: 30件に削減、多面性維持）
+# RSSフィードリスト
 RSS_FEEDS = [
-    # ========================================
-    # カテゴリ① 銘柄直結クエリ（10件）
-    # ========================================
-    
-    # 台積電（2330） - 3件
-    "https://news.google.com/rss/search?q=台積電+OR+TSMC&hl=zh-TW&gl=TW&ceid=TW:zh-Hant",
-    "https://news.google.com/rss/search?q=TSMC&hl=en-US&gl=US&ceid=US:en",
-    "https://news.google.com/rss/search?q=TSMC&hl=ja&gl=JP&ceid=JP:ja",
-    
-    # 創見（2451） - 2件
-    "https://news.google.com/rss/search?q=創見+OR+Transcend&hl=zh-TW&gl=TW&ceid=TW:zh-Hant",
-    "https://news.google.com/rss/search?q=創見+OR+Transcend&hl=ja&gl=JP&ceid=JP:ja",
-    
-    # 宇瞻（8271） - 2件
-    "https://news.google.com/rss/search?q=宇瞻+OR+Apacer&hl=zh-TW&gl=TW&ceid=TW:zh-Hant",
-    "https://news.google.com/rss/search?q=Apacer&hl=en-US&gl=US&ceid=US:en",
-    
-    # 廣達（2382） - 3件
-    "https://news.google.com/rss/search?q=廣達+OR+Quanta&hl=zh-TW&gl=TW&ceid=TW:zh-Hant",
-    "https://news.google.com/rss/search?q=Quanta+Computer&hl=en-US&gl=US&ceid=US:en",
-    "https://news.google.com/rss/search?q=廣達+OR+Quanta&hl=ja&gl=JP&ceid=JP:ja",
-    
-    # ========================================
-    # カテゴリ② 上流ドライバークエリ（13件）
-    # ========================================
-    
-    # 技術キーワード（6件）
-    "https://news.google.com/rss/search?q=EUV&hl=zh-TW&gl=TW&ceid=TW:zh-Hant",
-    "https://news.google.com/rss/search?q=CoWoS&hl=zh-TW&gl=TW&ceid=TW:zh-Hant",
-    "https://news.google.com/rss/search?q=HBM&hl=zh-TW&gl=TW&ceid=TW:zh-Hant",
-    "https://news.google.com/rss/search?q=液冷&hl=zh-TW&gl=TW&ceid=TW:zh-Hant",
-    "https://news.google.com/rss/search?q=先進製程&hl=zh-TW&gl=TW&ceid=TW:zh-Hant",
-    "https://news.google.com/rss/search?q=先進封裝&hl=zh-TW&gl=TW&ceid=TW:zh-Hant",
-    
-    # 顧客・プラットフォーム（3件）
-    "https://news.google.com/rss/search?q=NVIDIA&hl=zh-TW&gl=TW&ceid=TW:zh-Hant",
-    "https://news.google.com/rss/search?q=AI伺服器&hl=zh-TW&gl=TW&ceid=TW:zh-Hant",
-    "https://news.google.com/rss/search?q=GB200&hl=zh-TW&gl=TW&ceid=TW:zh-Hant",
-    
-    # 政策・地政学（2件）
-    "https://news.google.com/rss/search?q=美國廠&hl=zh-TW&gl=TW&ceid=TW:zh-Hant",
-    "https://news.google.com/rss/search?q=關稅&hl=zh-TW&gl=TW&ceid=TW:zh-Hant",
-    
-    # 需給・供給制約（2件）
-    "https://news.google.com/rss/search?q=DRAM價格&hl=zh-TW&gl=TW&ceid=TW:zh-Hant",
-    "https://news.google.com/rss/search?q=產能&hl=zh-TW&gl=TW&ceid=TW:zh-Hant",
-    
-    # ========================================
-    # カテゴリ③ 業績・イベントクエリ（4件）
-    # ========================================
-    
-    "https://news.google.com/rss/search?q=台積電+營收&hl=zh-TW&gl=TW&ceid=TW:zh-Hant",
-    "https://news.google.com/rss/search?q=創見+營收&hl=zh-TW&gl=TW&ceid=TW:zh-Hant",
-    "https://news.google.com/rss/search?q=宇瞻+營收&hl=zh-TW&gl=TW&ceid=TW:zh-Hant",
-    "https://news.google.com/rss/search?q=廣達+營收&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
+    "https://news.google.com/rss/search?q=台積電+when:7d&hl=zh-TW&gl=TW&ceid=TW:zh-Hant",
+    "https://news.google.com/rss/search?q=創見+when:7d&hl=zh-TW&gl=TW&ceid=TW:zh-Hant",
+    "https://news.google.com/rss/search?q=宇瞻+when:7d&hl=zh-TW&gl=TW&ceid=TW:zh-Hant",
+    "https://news.google.com/rss/search?q=廣達+when:7d&hl=zh-TW&gl=TW&ceid=TW:zh-Hant",
+    "https://money.udn.com/rssfeed/news/1001/5590", # 産業
+    "https://money.udn.com/rssfeed/news/1001/5591", # 証券
 ]
 
-# 除外ドメイン・キーワード設定
-EXCLUDED_DOMAINS = [
-    'ptt.cc', 'dcard.tw', 'mobile01.com', 'facebook.com', 'instagram.com',
-    'youtube.com', 'wikipedia.org', 'amazon.com', 'ruten.com.tw', 'shopee.tw'
-]
-
-EXCLUDED_KEYWORDS = [
-    '股市爆料同學會', '討論區', '懶人包', '優惠', '折扣', '開箱', '評測',
-    '謠言', '八卦', 'PTT', 'Dcard', 'Mobile01'
-]
-
-# ============================================================
-# 関数定義
-# ============================================================
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 def fetch_rss_feeds(days_back=7):
     """RSSフィードからニュースを収集"""
+    print(f"📰 RSSフィードからニュース収集中... (過去{days_back}日分)", flush=True)
     all_entries = []
     seen_links = set()
     
     cutoff_date = datetime.now(JST) - timedelta(days=days_back)
-    print(f"📰 RSSフィードからニュース収集中... (過去{days_back}日分)", flush=True)
     
-    for url in RSS_FEEDS:
-        try:
-            feed = feedparser.parse(url)
-            for entry in feed.entries:
-                # 日付フィルタリング
-                published = None
-                if hasattr(entry, 'published_parsed'):
-                    published = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc).astimezone(JST)
-                
-                if published and published < cutoff_date:
-                    continue
-                
-                # 重複チェック
-                if entry.link in seen_links:
-                    continue
-                
-                seen_links.add(entry.link)
-                
-                # 必要な情報を抽出
-                all_entries.append({
-                    'title': entry.title,
-                    'link': entry.link,
-                    'published': published,
-                    'source': entry.source.title if hasattr(entry, 'source') else 'Unknown',
-                    'summary': entry.summary if hasattr(entry, 'summary') else ''
-                })
-                
-        except Exception as e:
-            print(f"  ⚠️ フィード取得エラー: {url} - {e}", flush=True)
+    for feed_url in RSS_FEEDS:
+        # 30日フォールバック時はGoogle Newsのクエリパラメータを変更
+        if days_back > 7 and "when:7d" in feed_url:
+            feed_url = feed_url.replace("when:7d", "when:30d")
             
+        feed = feedparser.parse(feed_url)
+        for entry in feed.entries:
+            # 日付パース
+            published = None
+            if hasattr(entry, 'published_parsed'):
+                published = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc).astimezone(JST)
+            
+            if published and published > cutoff_date:
+                if entry.link not in seen_links:
+                    all_entries.append({
+                        'title': entry.title,
+                        'link': entry.link,
+                        'summary': getattr(entry, 'summary', ''),
+                        'published': published,
+                        'source': getattr(entry, 'source', {}).get('title', 'Unknown')
+                    })
+                    seen_links.add(entry.link)
+                    
     print(f"  RSS収集完了: {len(all_entries)}件", flush=True)
     return all_entries
 
 def resolve_redirects(entries):
-    """Google Newsの短縮URLを展開"""
+    """Google NewsなどのリダイレクトURLを解決（並列処理）"""
     print(f"🔗 URL解決中（{len(entries)}件）...", flush=True)
     
-    # 件数が多い場合は最新のものに絞る
+    # 件数が多い場合は最新のものに絞る（API制限回避）
     if len(entries) > 100:
         print("  ⚠️ 件数が多いため、最新100件のみ処理します", flush=True)
-        entries = sorted(entries, key=lambda x: x['published'] or datetime.min, reverse=True)[:100]
-    
-    resolved_entries = []
-    
-    # セッションの再利用
-    session = requests.Session()
-    
-    for entry in entries:
+        entries = sorted(entries, key=lambda x: x['published'], reverse=True)[:100]
+        
+    def resolve_url(entry):
         try:
-            # Google Newsのリンクかどうかチェック
-            if 'news.google.com' in entry['link']:
-                # HEADリクエストでリダイレクト先を取得（高速化）
-                response = session.head(entry['link'], allow_redirects=True, timeout=5)
+            # Google Newsのリダイレクト解決
+            if "news.google.com" in entry['link']:
+                response = requests.get(entry['link'], timeout=5, allow_redirects=True)
                 entry['link'] = response.url
+        except:
+            pass
+        return entry
+
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        list(executor.map(resolve_url, entries))
+        
+    # 重複排除（URL解決後）
+    unique_entries = []
+    seen_urls = set()
+    for entry in entries:
+        if entry['link'] not in seen_urls:
+            unique_entries.append(entry)
+            seen_urls.add(entry['link'])
             
-            # 除外ドメインチェック
-            domain = entry['link'].split('/')[2] if len(entry['link'].split('/')) > 2 else ''
-            if any(ex in domain for ex in EXCLUDED_DOMAINS):
-                continue
-                
-            resolved_entries.append(entry)
-            
-        except Exception:
-            # エラー時は元のリンクのまま追加（または除外）
-            resolved_entries.append(entry)
-            
-    print(f"✅ 重複除外後: {len(resolved_entries)}件", flush=True)
-    return resolved_entries
+    print(f"✅ 重複除外後: {len(unique_entries)}件", flush=True)
+    return unique_entries
 
 def analyze_relevance_with_llm(entry, stock_code, stock_info, is_fallback_mode=False):
-    """LLMを使用してニュースの関連性を判定"""
-    
-    # 判定基準の構築
-    criteria = f"""
-    1. 銘柄「{stock_info['name']}」({stock_code}) の業績、製品、技術、受注、提携に直接関係するか。
-    2. 競合他社や業界全体の動向で、この銘柄に重大な影響を与えるか。
-    3. 単なる市況概況や、名前が出ているだけの記事は除外する。
-    """
-    
-    if is_fallback_mode:
-        criteria += """
-    4. 【重要】記事の日付が古くても、現在も有効な情報（技術解説、長期展望、構造的な変化など）は「関連あり」とする。
-    5. 短期的な株価変動や、すでに終了したイベントの速報は除外する。
-        """
-    
+    """LLMを使用してニュースの関連性と重要度を判定"""
     prompt = f"""
-    以下のニュース記事が、投資家にとって「{stock_info['name']}」の分析に役立つ重要な情報を含んでいるか判定してください。
+    以下のニュース記事が、台湾の銘柄「{stock_info['name']} ({stock_code})」の株価や業績に直接影響を与える重要なニュースかどうか判定してください。
     
     タイトル: {entry['title']}
-    ソース: {entry['source']}
-    概要: {entry['summary']}
+    要約: {entry['summary']}
     
-    判定基準:
-    {criteria}
-    
-    JSON形式で回答してください:
+    以下のJSON形式で回答してください:
     {{
         "is_relevant": true/false,
-        "reason": "判定理由（日本語、50文字以内）",
-        "summary": "記事の要約（日本語、100文字以内。投資判断に役立つ具体的な事実を中心に）"
+        "reason": "判定理由（日本語）",
+        "summary": "投資家向けの簡潔な要約（日本語、50文字以内）",
+        "importance": 1-5の整数（5が最高）
     }}
+    
+    判定基準:
+    - 銘柄名が明記されている、または主要製品・サプライチェーンに深く関わる場合はTrue
+    - 単なる市況概況や、名前が羅列されているだけの記事はFalse
+    - {stock_info.get('keywords', [])} に関連する具体的な動向があればTrue
     """
     
     try:
@@ -269,6 +166,67 @@ def analyze_relevance_with_llm(entry, stock_code, stock_info, is_fallback_mode=F
         
     except Exception as e:
         return {"is_relevant": False, "reason": f"エラー: {e}", "summary": ""}
+
+def force_pick_news(candidates, stock_info):
+    """
+    【強制採用ロジック】
+    LLM判定で0件になった場合、候補の中から最も適切なニュースを1つ強制的に選ぶ。
+    優先順位:
+    1. 重要キーワード（營收, 法說會, 展望など）を含む記事
+    2. タイトルに銘柄名が含まれる記事
+    3. 最も新しい記事
+    """
+    if not candidates:
+        return None
+
+    # 重要キーワード
+    priority_keywords = ["營收", "法說會", "財測", "展望", "接單", "CapEx", "DRAM", "NAND", "HBM", "CoWoS", "關稅", "管制", "EPS", "獲利"]
+    
+    # 1. 重要キーワードを含むものを探す
+    for entry in candidates:
+        text = (entry['title'] + entry['summary']).lower()
+        for kw in priority_keywords:
+            if kw.lower() in text:
+                print(f"  ⚠️ FORCED PICK used: {stock_info['name']} reason=Keyword match ({kw}) url={entry['link']}", flush=True)
+                return {
+                    **entry,
+                    'llm_result': {
+                        'is_relevant': True,
+                        'reason': f"【自動補完】重要キーワード「{kw}」を含むため強制採用",
+                        'summary': f"【自動補完】{entry['title']}（{kw}関連）",
+                        'importance': 3
+                    },
+                    'forced_pick': True
+                }
+
+    # 2. タイトルに銘柄名が含まれるものを探す
+    for entry in candidates:
+        if stock_info['name'] in entry['title']:
+            print(f"  ⚠️ FORCED PICK used: {stock_info['name']} reason=Title match url={entry['link']}", flush=True)
+            return {
+                **entry,
+                'llm_result': {
+                    'is_relevant': True,
+                    'reason': "【自動補完】タイトルに銘柄名を含むため強制採用",
+                    'summary': f"【自動補完】{entry['title']}",
+                    'importance': 3
+                },
+                'forced_pick': True
+            }
+
+    # 3. なければ最新のものを採用
+    entry = candidates[0] # candidatesは既に日付順でソートされている前提
+    print(f"  ⚠️ FORCED PICK used: {stock_info['name']} reason=Newest fallback url={entry['link']}", flush=True)
+    return {
+        **entry,
+        'llm_result': {
+            'is_relevant': True,
+            'reason': "【自動補完】関連ニュース不足のため最新記事を採用",
+            'summary': f"【自動補完】{entry['title']}",
+            'importance': 1
+        },
+        'forced_pick': True
+    }
 
 def process_stock_news(stock_code, stock_info, all_entries, is_fallback_mode=False):
     """特定の銘柄に関するニュースを処理"""
@@ -320,6 +278,14 @@ def process_stock_news(stock_code, stock_info, all_entries, is_fallback_mode=Fal
             except Exception:
                 pass
                 
+    # 【強制採用ロジック】関連ニュースが0件の場合、候補から強制的に1つ選ぶ
+    if not relevant_news and candidates:
+        print("  ⚠️ 関連ニュースが0件のため、強制採用ロジックを実行します...", flush=True)
+        forced_news = force_pick_news(candidates, stock_info)
+        if forced_news:
+            relevant_news.append(forced_news)
+            news_summaries_for_aux.append(forced_news['llm_result']['summary'])
+
     print(f"✅ 関連ニュース: {len(relevant_news)}件", flush=True)
     
     # 3. ニュースクラスタリング（v5.1機能）
@@ -360,29 +326,29 @@ def main():
     print(f"台湾株ニュース配信システム {VERSION}", flush=True)
     print("============================================================", flush=True)
     
-    # 第1段階: 直近7日モード
-    print("=== 第1段階: 直近7日モード ===", flush=True)
-    all_entries = fetch_rss_feeds(days_back=7)
-    all_entries = resolve_redirects(all_entries)
+    # 第1段階: 直近7日
+    print("\n=== 第1段階: 直近7日モード ===", flush=True)
+    entries = fetch_rss_feeds(days_back=7)
+    entries = resolve_redirects(entries)
     
     results = {}
     stocks_needing_fallback = []
     
     for stock_code, stock_info in STOCKS.items():
-        result = process_stock_news(stock_code, stock_info, all_entries, is_fallback_mode=False)
+        result = process_stock_news(stock_code, stock_info, entries, is_fallback_mode=False)
         results[stock_code] = result
         
         # ニュースが0件の場合はフォールバック対象に追加
+        # ※強制採用ロジックが入ったので、candidatesが0件の場合のみここに来るはず
         if result['news_count'] == 0:
             stocks_needing_fallback.append(stock_code)
             
-    # 第2段階: 30日フォールバックモード（対象銘柄のみ）
+    # 第2段階: 30日フォールバック（ニュース0件の銘柄のみ）
     if stocks_needing_fallback:
         print("\n=== 第2段階: 30日フォールバックモード ===", flush=True)
         print(f"対象銘柄: {', '.join(stocks_needing_fallback)}", flush=True)
         
-        # 過去30日分のRSSを取得（コスト削減のため、対象銘柄のクエリに絞るのが理想だが、今回は簡易的に全取得）
-        # ※本来はここでクエリを絞るべきだが、RSS_FEEDSの構造上、全取得してフィルタリングする
+        # 過去30日分のRSSを取得
         fallback_entries = fetch_rss_feeds(days_back=30)
         fallback_entries = resolve_redirects(fallback_entries)
         
@@ -393,7 +359,7 @@ def main():
             # フォールバックモードで再処理
             result = process_stock_news(stock_code, stock_info, fallback_entries, is_fallback_mode=True)
             
-            # 結果を上書き（ニュースが見つかった場合のみ、あるいは0件でも投資判断補助はあるので更新）
+            # 結果を上書き
             results[stock_code] = result
 
     # メール作成と送信
