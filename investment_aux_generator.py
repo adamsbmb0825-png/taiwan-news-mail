@@ -72,7 +72,7 @@ def generate_investment_aux_news(stock_id, stock_info, recent_news_list):
 
     try:
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-4.1-mini",
             messages=[
                 {"role": "system", "content": "あなたは冷静沈着な株式市場アナリストです。JSON形式で出力します。"},
                 {"role": "user", "content": prompt}
